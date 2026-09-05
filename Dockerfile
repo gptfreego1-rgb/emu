@@ -89,8 +89,7 @@ def start_emulator():
     command = [
         'java', '-noverify', '-Djava.awt.headless=false',
         '-cp', MICROEMU + ':' + DEVICE,
-        'org.microemu.app.Main',
-        JAD
+        'org.microemu.app.Main', JAD
     ]
     log = open(os.path.join(DATA_DIR, 'emulator.log'), 'ab', buffering=0)
     process = subprocess.Popen(
@@ -250,4 +249,4 @@ SH
 WORKDIR /opt/avatar
 EXPOSE 5901 8080
 
-CMD ["sh", "-c", "mkdir -p /data; if [ ! -s /data/vnc.pass ]; then x11vnc -storepasswd \"${VNC_PASSWORD:-123456}\" /data/vnc.pass >/dev/null 2>&1 || true; fi; Xvfb :99 -screen 0 393x326x24 -ac +extension GLX >/data/xvfb.log 2>&1 & sleep 2; if xdpyinfo -display :99 >/dev/null 2>&1; then (while true; do x11vnc -display :99 -rfbport 5901 -rfbauth /data/vnc.pass -forever -shared -xkb -noxrecord -noxfixes -noxdamage >>/data/x11vnc.log 2>&1 || true; sleep 2; done) & else echo 'Xvfb failed; HTTP panel will still start' >>/data/xvfb.log; fi; exec python3 /opt/avatar/app.py"]
+CMD ["sh", "-c", "mkdir -p /data/.microemulator; printf '%s\n' '<config><devices><device default=\"true\"><name>Avatar 393x326</name><descriptor>org/microemu/device/resizable/device.xml</descriptor><rectangle><x>0</x><y>0</y><width>393</width><height>326</height></rectangle></device></devices></config>' > /data/.microemulator/config2.xml; if [ ! -s /data/vnc.pass ]; then x11vnc -storepasswd \"${VNC_PASSWORD:-123456}\" /data/vnc.pass >/dev/null 2>&1 || true; fi; Xvfb :99 -screen 0 393x326x24 -ac +extension GLX >/data/xvfb.log 2>&1 & sleep 2; if xdpyinfo -display :99 >/dev/null 2>&1; then (while true; do x11vnc -display :99 -rfbport 5901 -rfbauth /data/vnc.pass -forever -shared -xkb -noxrecord -noxfixes -noxdamage >>/data/x11vnc.log 2>&1 || true; sleep 2; done) & else echo 'Xvfb failed; HTTP panel will still start' >>/data/xvfb.log; fi; exec python3 /opt/avatar/app.py"]
