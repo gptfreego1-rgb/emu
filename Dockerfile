@@ -242,6 +242,5 @@ SH
 
 WORKDIR /opt/avatar
 EXPOSE 5901
-VOLUME ["/data"]
 
 CMD ["sh", "-c", "Xvfb :99 -screen 0 320x480x24 -ac +extension GLX >/data/xvfb.log 2>&1 & exec python3 /opt/avatar/app.py"]
