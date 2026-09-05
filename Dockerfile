@@ -2,7 +2,7 @@ FROM eclipse-temurin:17-jre-jammy
 
 ENV DEBIAN_FRONTEND=noninteractive \
     DISPLAY=:99 \
-    PORT=5901 \
+    PORT=8080 \
     DATA_DIR=/data
 
 RUN apt-get update \
