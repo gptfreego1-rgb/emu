@@ -30,7 +30,8 @@ import time
 from urllib.parse import parse_qs, quote, urlparse
 
 HOST = os.getenv('HOST', '0.0.0.0')
-PORT = int(os.getenv('PORT', '5901'))
+# Panel HTTP Railway memakai 8080; VNC/RFB tetap memakai 5901.
+PORT = int(os.getenv('HTTP_PORT', '8080'))
 DISPLAY = os.getenv('DISPLAY', ':99')
 DATA_DIR = os.getenv('DATA_DIR', '/data')
 DEFAULT_PASSWORD = os.getenv('DEFAULT_PASSWORD', '123456')
