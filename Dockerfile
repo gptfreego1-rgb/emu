@@ -1,17 +1,4 @@
-FROM eclipse-temurin:8-jdk-jammy AS builder
-
-ENV DEBIAN_FRONTEND=noninteractive
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends git ant \
-    && rm -rf /var/lib/apt/lists/* \
-    && git clone --depth 1 https://github.com/TASEmulators/freej2me-plus.git /tmp/freej2me-plus \
-    && cd /tmp/freej2me-plus \
-    && ant \
-    && mkdir -p /opt/build \
-    && cp build/freej2me_plus.jar /opt/build/freej2me.jar
-
-FROM eclipse-temurin:8-jre-jammy
+FROM eclipse-temurin:17-jre-jammy
 
 ENV DEBIAN_FRONTEND=noninteractive \
     DISPLAY=:99 \
@@ -19,12 +6,14 @@ ENV DEBIAN_FRONTEND=noninteractive \
     DATA_DIR=/data
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 curl imagemagick xvfb x11vnc x11-utils \
+    && apt-get install -y --no-install-recommends python3 curl unzip imagemagick xvfb x11vnc x11-utils xdotool \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /opt/avatar /data \
-    && curl -L --fail --retry 3 -o /opt/avatar/avatar.jar https://files.catbox.moe/sllphh.ja
-
-COPY --from=builder /opt/build/freej2me.jar /opt/avatar/freej2me.jar
+    && curl -L --fail --retry 3 -o /opt/avatar/avatar.jar https://files.catbox.moe/sllphh.ja \
+    && curl -L --fail --retry 3 -o /tmp/kemulator.zip https://github.com/shinovon/KEmulator/releases/download/v2.21.4/kemnnmod.v2.21.4.nojre.zip \
+    && unzip -q /tmp/kemulator.zip -d /tmp/kemulator \
+    && cp /tmp/kemulator/kemnnmod/KEmulator.jar /opt/avatar/kemulator.jar \
+    && rm -rf /tmp/kemulator.zip /tmp/kemulator
 
 RUN <<'SH'
 cat > /opt/avatar/app.py <<'PY'
@@ -46,7 +35,7 @@ DISPLAY = os.getenv('DISPLAY', ':99')
 DATA_DIR = os.getenv('DATA_DIR', '/data')
 DEFAULT_PASSWORD = os.getenv('DEFAULT_PASSWORD', '123456')
 JAR = '/opt/avatar/avatar.jar'
-FREEJ2ME = '/opt/avatar/freej2me.jar'
+KEMULATOR = '/opt/avatar/kemulator.jar'
 JAD = os.path.join(DATA_DIR, 'avatar.jad')
 PASSWORD_FILE = os.path.join(DATA_DIR, 'password.sha256')
 SCREENSHOT = os.path.join(DATA_DIR, 'microemulator.png')
@@ -94,9 +83,7 @@ def start_emulator():
     # Opsi -noverify diletakkan sebelum -jar karena itu sintaks Java launcher yang valid.
     command = [
         'java', '-noverify', '-Djava.awt.headless=false',
-        '-jar', FREEJ2ME,
-        'file:///opt/avatar/avatar.jar',
-        '0', str(width), str(height), '1', '0', '60', '10'
+        '-jar', KEMULATOR, JAR
     ]
     log = open(os.path.join(DATA_DIR, 'emulator.log'), 'ab', buffering=0)
     process = subprocess.Popen(
@@ -106,6 +93,11 @@ def start_emulator():
         stdout=log,
         stderr=subprocess.STDOUT
     )
+    subprocess.Popen([
+        'sh', '-c',
+        "sleep 3; window=$(xdotool search --name 'KEmulator' 2>/dev/null | head -1); "
+        "if [ -n \"$window\" ]; then xdotool windowsize \"$window\" %d %d; fi" % (width, height)
+    ], env={**os.environ, 'DISPLAY': DISPLAY})
     return 'Emulator berhasil dimulai'
 
 
