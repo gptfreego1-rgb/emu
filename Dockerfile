@@ -6,7 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     DATA_DIR=/data
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 curl unzip imagemagick xvfb x11vnc \
+    && apt-get install -y --no-install-recommends python3 curl unzip imagemagick xvfb x11vnc x11-utils \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /opt/avatar /data \
     && curl -L --fail --retry 3 -o /tmp/avatar.jar https://files.catbox.moe/sllphh.ja \
@@ -250,4 +250,4 @@ SH
 WORKDIR /opt/avatar
 EXPOSE 5901 8080
 
-CMD ["sh", "-c", "set -eu; mkdir -p /data; if [ ! -s /data/vnc.pass ]; then x11vnc -storepasswd \"${VNC_PASSWORD:-123456}\" /data/vnc.pass >/dev/null; fi; Xvfb :99 -screen 0 393x326x32 -ac +extension GLX >/data/xvfb.log 2>&1 & sleep 2; x11vnc -display :99 -rfbport 5901 -rfbauth /data/vnc.pass -forever -shared -xkb -noxrecord -noxfixes -noxdamage >/data/x11vnc.log 2>&1 & exec python3 /opt/avatar/app.py"]
+CMD ["sh", "-c", "set -eu; mkdir -p /data; if [ ! -s /data/vnc.pass ]; then x11vnc -storepasswd \"${VNC_PASSWORD:-123456}\" /data/vnc.pass >/dev/null; fi; Xvfb :99 -screen 0 393x326x32 -ac +extension GLX >/data/xvfb.log 2>&1 & until xdpyinfo -display :99 >/dev/null 2>&1; do sleep 0.2; done; (while true; do x11vnc -display :99 -rfbport 5901 -rfbauth /data/vnc.pass -forever -shared -xkb -noxrecord -noxfixes -noxdamage >>/data/x11vnc.log 2>&1 || true; sleep 2; done) & exec python3 /opt/avatar/app.py"]
