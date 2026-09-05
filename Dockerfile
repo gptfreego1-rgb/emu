@@ -1,4 +1,4 @@
-FROM eclipse-temurin:17-jdk-jammy AS builder
+FROM eclipse-temurin:8-jdk-jammy AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -9,9 +9,9 @@ RUN apt-get update \
     && cd /tmp/freej2me-plus \
     && ant \
     && mkdir -p /opt/build \
-    && cp build/freej2me.jar /opt/build/freej2me.jar
+    && cp build/freej2me_plus.jar /opt/build/freej2me.jar
 
-FROM eclipse-temurin:17-jre-jammy
+FROM eclipse-temurin:8-jre-jammy
 
 ENV DEBIAN_FRONTEND=noninteractive \
     DISPLAY=:99 \
