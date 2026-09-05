@@ -10,10 +10,11 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /opt/avatar /data \
     && curl -L --fail --retry 3 -o /opt/avatar/avatar.jar https://files.catbox.moe/sllphh.ja \
-    && curl -L --fail --retry 3 -o /tmp/kemulator.zip https://github.com/shinovon/KEmulator/releases/download/v2.21.4/kemnnmod.v2.21.4.nojre.zip \
-    && unzip -q /tmp/kemulator.zip -d /tmp/kemulator \
-    && cp /tmp/kemulator/kemnnmod/KEmulator.jar /opt/avatar/kemulator.jar \
-    && rm -rf /tmp/kemulator.zip /tmp/kemulator
+    && curl -L --fail --retry 3 -o /tmp/microemulator.zip 'https://sourceforge.net/projects/microemulator/files/microemulator/2.0.4/microemulator-2.0.4.zip/download' \
+    && unzip -q /tmp/microemulator.zip -d /tmp \
+    && cp /tmp/microemulator-2.0.4/microemulator.jar /opt/avatar/microemulator.jar \
+    && cp /tmp/microemulator-2.0.4/devices/microemu-device-resizable.jar /opt/avatar/microemu-device-resizable.jar \
+    && rm -rf /tmp/microemulator.zip /tmp/microemulator-2.0.4
 
 RUN <<'SH'
 cat > /opt/avatar/app.py <<'PY'
@@ -35,11 +36,14 @@ DISPLAY = os.getenv('DISPLAY', ':99')
 DATA_DIR = os.getenv('DATA_DIR', '/data')
 DEFAULT_PASSWORD = os.getenv('DEFAULT_PASSWORD', '123456')
 JAR = '/opt/avatar/avatar.jar'
-KEMULATOR = '/opt/avatar/kemulator.jar'
+MICROEMU = '/opt/avatar/microemulator.jar'
+DEVICE = '/opt/avatar/microemu-device-resizable.jar'
 JAD = os.path.join(DATA_DIR, 'avatar.jad')
 PASSWORD_FILE = os.path.join(DATA_DIR, 'password.sha256')
 SCREENSHOT = os.path.join(DATA_DIR, 'microemulator.png')
 SIZE_FILE = os.path.join(DATA_DIR, 'screen.size')
+CONFIG_DIR = os.path.join(DATA_DIR, '.microemulator')
+CONFIG_FILE = os.path.join(CONFIG_DIR, 'config2.xml')
 process = None
 
 
@@ -52,6 +56,10 @@ def ensure_files():
     if not os.path.exists(SIZE_FILE):
         with open(SIZE_FILE, 'w') as f:
             f.write('393 326\n')
+    if not os.path.exists(CONFIG_FILE):
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(CONFIG_FILE, 'w') as f:
+            f.write('<config><devices><device default="true"><name>Avatar resizable</name><descriptor>org/microemu/device/resizable/device.xml</descriptor><rectangle><x>0</x><y>0</y><width>393</width><height>326</height></rectangle></device></devices></config>\n')
     if not os.path.exists(PASSWORD_FILE):
         with open(PASSWORD_FILE, 'w') as f:
             f.write(hash_password(DEFAULT_PASSWORD))
@@ -83,7 +91,9 @@ def start_emulator():
     # Opsi -noverify diletakkan sebelum -jar karena itu sintaks Java launcher yang valid.
     command = [
         'java', '-noverify', '-Djava.awt.headless=false',
-        '-jar', KEMULATOR, JAR
+        '-Duser.home=' + DATA_DIR,
+        '-cp', MICROEMU + ':' + DEVICE,
+        'org.microemu.app.Main', JAD
     ]
     log = open(os.path.join(DATA_DIR, 'emulator.log'), 'ab', buffering=0)
     process = subprocess.Popen(
@@ -116,6 +126,9 @@ def resize_emulator(width, height):
     height = max(120, min(1200, int(height)))
     with open(SIZE_FILE, 'w') as f:
         f.write('%d %d\n' % (width, height))
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    with open(CONFIG_FILE, 'w') as f:
+        f.write('<config><devices><device default="true"><name>Avatar resizable</name><descriptor>org/microemu/device/resizable/device.xml</descriptor><rectangle><x>0</x><y>0</y><width>%d</width><height>%d</height></rectangle></device></devices></config>\n' % (width, height))
     if emulator_running():
         process.terminate()
         try:
