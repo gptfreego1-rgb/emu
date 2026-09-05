@@ -14,6 +14,7 @@ RUN apt-get update \
     && curl -L --fail --retry 3 -o /tmp/microemulator.zip 'https://sourceforge.net/projects/microemulator/files/microemulator/2.0.4/microemulator-2.0.4.zip/download' \
     && unzip -q /tmp/microemulator.zip -d /tmp \
     && cp /tmp/microemulator-2.0.4/microemulator.jar /opt/avatar/microemulator.jar \
+    && cp /tmp/microemulator-2.0.4/devices/microemu-device-resizable.jar /opt/avatar/microemu-device-resizable.jar \
     && rm -rf /tmp/microemulator.zip /tmp/microemulator-2.0.4
 
 RUN <<'SH'
@@ -37,6 +38,7 @@ DATA_DIR = os.getenv('DATA_DIR', '/data')
 DEFAULT_PASSWORD = os.getenv('DEFAULT_PASSWORD', '123456')
 JAR = '/opt/avatar/avatar.jar'
 MICROEMU = '/opt/avatar/microemulator.jar'
+DEVICE = '/opt/avatar/microemu-device-resizable.jar'
 JAD = os.path.join(DATA_DIR, 'avatar.jad')
 PASSWORD_FILE = os.path.join(DATA_DIR, 'password.sha256')
 SCREENSHOT = os.path.join(DATA_DIR, 'microemulator.png')
@@ -86,7 +88,9 @@ def start_emulator():
     # Opsi -noverify diletakkan sebelum -jar karena itu sintaks Java launcher yang valid.
     command = [
         'java', '-noverify', '-Djava.awt.headless=false',
-        '-jar', MICROEMU, JAD
+        '-cp', MICROEMU + ':' + DEVICE,
+        'org.microemu.app.Main',
+        JAD
     ]
     log = open(os.path.join(DATA_DIR, 'emulator.log'), 'ab', buffering=0)
     process = subprocess.Popen(
@@ -102,7 +106,7 @@ def start_emulator():
 def make_screenshot():
     ensure_files()
     result = subprocess.run(
-        ['import', '-display', DISPLAY, '-window', 'root', '-crop', '320x480+0+0', SCREENSHOT],
+        ['import', '-display', DISPLAY, '-window', 'root', '-crop', '393x326+0+0', SCREENSHOT],
         capture_output=True
     )
     if result.returncode != 0:
@@ -246,4 +250,4 @@ SH
 WORKDIR /opt/avatar
 EXPOSE 5901 8080
 
-CMD ["sh", "-c", "set -eu; mkdir -p /data; if [ ! -s /data/vnc.pass ]; then x11vnc -storepasswd \"${VNC_PASSWORD:-123456}\" /data/vnc.pass >/dev/null; fi; Xvfb :99 -screen 0 320x480x24 -ac +extension GLX >/data/xvfb.log 2>&1 & sleep 2; x11vnc -display :99 -rfbport 5901 -rfbauth /data/vnc.pass -forever -shared -xkb -noxrecord -noxfixes -noxdamage >/data/x11vnc.log 2>&1 & exec python3 /opt/avatar/app.py"]
+CMD ["sh", "-c", "set -eu; mkdir -p /data; if [ ! -s /data/vnc.pass ]; then x11vnc -storepasswd \"${VNC_PASSWORD:-123456}\" /data/vnc.pass >/dev/null; fi; Xvfb :99 -screen 0 393x326x32 -ac +extension GLX >/data/xvfb.log 2>&1 & sleep 2; x11vnc -display :99 -rfbport 5901 -rfbauth /data/vnc.pass -forever -shared -xkb -noxrecord -noxfixes -noxdamage >/data/x11vnc.log 2>&1 & exec python3 /opt/avatar/app.py"]
