@@ -1,3 +1,16 @@
+FROM eclipse-temurin:17-jdk-jammy AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ant \
+    && rm -rf /var/lib/apt/lists/* \
+    && git clone --depth 1 https://github.com/TASEmulators/freej2me-plus.git /tmp/freej2me-plus \
+    && cd /tmp/freej2me-plus \
+    && ant \
+    && mkdir -p /opt/build \
+    && cp build/freej2me.jar /opt/build/freej2me.jar
+
 FROM eclipse-temurin:17-jre-jammy
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -6,16 +19,12 @@ ENV DEBIAN_FRONTEND=noninteractive \
     DATA_DIR=/data
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 curl unzip imagemagick xvfb x11vnc x11-utils git ant \
+    && apt-get install -y --no-install-recommends python3 curl imagemagick xvfb x11vnc x11-utils \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /opt/avatar /data \
-    && curl -L --fail --retry 3 -o /tmp/avatar.jar https://files.catbox.moe/sllphh.ja \
-    && mv /tmp/avatar.jar /opt/avatar/avatar.jar \
-    && git clone --depth 1 https://github.com/TASEmulators/freej2me-plus.git /tmp/freej2me-plus \
-    && cd /tmp/freej2me-plus \
-    && ant \
-    && cp build/freej2me.jar /opt/avatar/freej2me.jar \
-    && rm -rf /tmp/freej2me-plus
+    && curl -L --fail --retry 3 -o /opt/avatar/avatar.jar https://files.catbox.moe/sllphh.ja
+
+COPY --from=builder /opt/build/freej2me.jar /opt/avatar/freej2me.jar
 
 RUN <<'SH'
 cat > /opt/avatar/app.py <<'PY'
