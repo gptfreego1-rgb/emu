@@ -42,6 +42,8 @@ DEVICE = '/opt/avatar/microemu-device-resizable.jar'
 JAD = os.path.join(DATA_DIR, 'avatar.jad')
 PASSWORD_FILE = os.path.join(DATA_DIR, 'password.sha256')
 SCREENSHOT = os.path.join(DATA_DIR, 'microemulator.png')
+CONFIG_DIR = os.path.join(DATA_DIR, '.microemulator')
+CONFIG_FILE = os.path.join(CONFIG_DIR, 'config2.xml')
 process = None
 
 
@@ -112,6 +114,26 @@ def make_screenshot():
         raise RuntimeError(result.stderr.decode(errors='replace') or 'Gagal mengambil screenshot')
 
 
+def resize_emulator(width, height):
+    width = max(120, min(1200, int(width)))
+    height = max(120, min(1200, int(height)))
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    config = ('<config><devices><device default="true"><name>Avatar %dx%d</name>'
+              '<descriptor>org/microemu/device/resizable/device.xml</descriptor>'
+              '<rectangle><x>0</x><y>0</y><width>%d</width><height>%d</height>'
+              '</rectangle></device></devices></config>\n') % (width, height, width, height)
+    with open(CONFIG_FILE, 'w') as f:
+        f.write(config)
+    if emulator_running():
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+    start_emulator()
+    return width, height
+
+
 def page(message=''):
     running = emulator_running()
     notice = '<div class="notice">%s</div>' % message if message else ''
@@ -125,6 +147,7 @@ def page(message=''):
 </style></head><body><main>
 <div class="top"><div><div class="brand">Avatar MicroEmulator</div><div class="muted">J2ME game control panel</div></div><div class="status%s">● %s</div></div>%s
 <div class="grid"><section class="card"><h2>Emulator</h2><p class="muted">Game: avatar.jar · Display virtual: %s</p>
+<form method="post" action="/resize"><label>Lebar (px)</label><input type="number" name="width" value="393" min="120" max="1200" required><label>Tinggi (px)</label><input type="number" name="height" value="326" min="120" max="1200" required><button class="alt">Terapkan ukuran dari web</button></form>
 <form method="post" action="/start"><button>Start emulator</button></form>
 <form method="post" action="/screenshot"><button class="alt">Ambil screenshot</button><a href="/screenshot.png" target="_blank"><button type="button" class="alt">Buka gambar</button></a></form>
 <p class="small">Screenshot diambil dari framebuffer Xvfb MicroEmulator.</p><img class="shot" src="/screenshot.png?%s" alt="Screenshot emulator" onerror="this.style.display='none'"></section>
@@ -199,6 +222,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             elif path == '/screenshot':
                 make_screenshot()
                 message = 'Screenshot berhasil diperbarui'
+            elif path == '/resize':
+                width = fields.get('width', ['393'])[0]
+                height = fields.get('height', ['326'])[0]
+                width, height = resize_emulator(width, height)
+                message = 'Ukuran MicroEmulator diubah menjadi %dx%d dari panel web' % (width, height)
             elif path == '/change-password':
                 current = fields.get('current', [''])[0]
                 new = fields.get('new', [''])[0]
@@ -249,4 +277,4 @@ SH
 WORKDIR /opt/avatar
 EXPOSE 5901 8080
 
-CMD ["sh", "-c", "mkdir -p /data/.microemulator; printf '%s\n' '<config><devices><device default=\"true\"><name>Avatar 393x326</name><descriptor>org/microemu/device/resizable/device.xml</descriptor><rectangle><x>0</x><y>0</y><width>393</width><height>326</height></rectangle></device></devices></config>' > /data/.microemulator/config2.xml; if [ ! -s /data/vnc.pass ]; then x11vnc -storepasswd \"${VNC_PASSWORD:-123456}\" /data/vnc.pass >/dev/null 2>&1 || true; fi; Xvfb :99 -screen 0 393x326x24 -ac +extension GLX >/data/xvfb.log 2>&1 & sleep 2; if xdpyinfo -display :99 >/dev/null 2>&1; then (while true; do x11vnc -display :99 -rfbport 5901 -rfbauth /data/vnc.pass -forever -shared -xkb -noxrecord -noxfixes -noxdamage >>/data/x11vnc.log 2>&1 || true; sleep 2; done) & else echo 'Xvfb failed; HTTP panel will still start' >>/data/xvfb.log; fi; exec python3 /opt/avatar/app.py"]
+CMD ["sh", "-c", "mkdir -p /data/.microemulator; if [ ! -s /data/.microemulator/config2.xml ]; then printf '%s\n' '<config><devices><device default=\"true\"><name>Avatar 393x326</name><descriptor>org/microemu/device/resizable/device.xml</descriptor><rectangle><x>0</x><y>0</y><width>393</width><height>326</height></rectangle></device></devices></config>' > /data/.microemulator/config2.xml; fi; if [ ! -s /data/vnc.pass ]; then x11vnc -storepasswd \"${VNC_PASSWORD:-123456}\" /data/vnc.pass >/dev/null 2>&1 || true; fi; Xvfb :99 -screen 0 393x326x24 -ac +extension GLX >/data/xvfb.log 2>&1 & sleep 2; if xdpyinfo -display :99 >/dev/null 2>&1; then (while true; do x11vnc -display :99 -rfbport 5901 -rfbauth /data/vnc.pass -forever -shared -xkb -noxrecord -noxfixes -noxdamage >>/data/x11vnc.log 2>&1 || true; sleep 2; done) & else echo 'Xvfb failed; HTTP panel will still start' >>/data/xvfb.log; fi; exec python3 /opt/avatar/app.py"]
