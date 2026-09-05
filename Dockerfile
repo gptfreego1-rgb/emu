@@ -246,4 +246,4 @@ SH
 WORKDIR /opt/avatar
 EXPOSE 5901 8080
 
-CMD ["sh", "-c", "set -eu; mkdir -p /data; if [ ! -s /data/vnc.pass ]; then x11vnc -storepasswd \"${VNC_PASSWORD:-123456}\" /data/vnc.pass >/dev/null; fi; Xvfb :99 -screen 0 320x480x24 -ac +extension GLX >/data/xvfb.log 2>&1 & x11vnc -display :99 -rfbport 5901 -rfbauth /data/vnc.pass -forever -shared -xkb -noxrecord -noxfixes -noxdamage >/data/x11vnc.log 2>&1 & exec python3 /opt/avatar/app.py"]
+CMD ["sh", "-c", "set -eu; mkdir -p /data; if [ ! -s /data/vnc.pass ]; then x11vnc -storepasswd \"${VNC_PASSWORD:-123456}\" /data/vnc.pass >/dev/null; fi; Xvfb :99 -screen 0 320x480x24 -ac +extension GLX >/data/xvfb.log 2>&1 & sleep 2; x11vnc -display :99 -rfbport 5901 -rfbauth /data/vnc.pass -forever -shared -xkb -noxrecord -noxfixes -noxdamage >/data/x11vnc.log 2>&1 & exec python3 /opt/avatar/app.py"]
