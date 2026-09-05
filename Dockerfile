@@ -6,7 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     DATA_DIR=/data
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 curl unzip imagemagick xvfb \
+    && apt-get install -y --no-install-recommends python3 curl unzip imagemagick xvfb x11vnc \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /opt/avatar /data \
     && curl -L --fail --retry 3 -o /tmp/avatar.jar https://files.catbox.moe/sllphh.ja \
@@ -25,6 +25,7 @@ import hmac
 import http.server
 import os
 import subprocess
+import threading
 import time
 from urllib.parse import parse_qs, quote, urlparse
 
@@ -116,7 +117,7 @@ def page(message=''):
 <html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Avatar MicroEmulator</title>
 <style>
-:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#0b1020;color:#eef2ff;font:15px system-ui,-apple-system,Segoe UI,sans-serif}main{max-width:980px;margin:auto;padding:32px 20px}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}.brand{font-size:25px;font-weight:800}.muted,.small{color:#97a3bf}.small{font-size:13px}.grid{display:grid;grid-template-columns:1.1fr .9fr;gap:18px}.card{background:#121a2e;border:1px solid #263453;border-radius:18px;padding:22px;box-shadow:0 14px 40px #0003}h2{margin:0 0 8px}.status{padding:6px 11px;border-radius:99px;background:#163d32;color:#70e1b4}.status.stopped{background:#442333;color:#ff9db2}button{border:0;border-radius:10px;padding:11px 15px;background:#6d5dfc;color:white;font-weight:700;cursor:pointer;margin:5px 5px 5px 0}button.alt{background:#263453}input{width:100%;padding:12px;border:1px solid #334367;border-radius:10px;background:#0c1426;color:white;margin:7px 0 12px}.notice{background:#1d2b4a;padding:12px;border-radius:10px;margin-bottom:18px}.shot{width:100%;min-height:260px;object-fit:contain;background:#080b13;border-radius:12px;margin-top:14px;border:1px solid #263453}@media(max-width:720px){.grid{grid-template-columns:1fr}}
+:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#0b1020;color:#eef2ff;font:15px system-ui,-apple-system,Segoe UI,sans-serif}main{max-width:980px;margin:auto;padding:32px 20px}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}.brand{font-size:25px;font-weight:800}.muted,.small{color:#97a3bf}.small{font-size:13px}.grid{display:grid;grid-template-columns:1.1fr .9fr;gap:18px}.card{background:#121a2e;border:1px solid #263453;border-radius:18px;padding:22px;box-shadow:0 14px 40px #0003}h2{margin:0 0 8px}.status{padding:6px 11px;border-radius:99px;background:#163d32;color:#70e1b4}.status.stopped{background:#442333;color:#ff9db2}button{border:0;border-radius:10px;padding:11px 15px;background:#6d5dfc;color:white;font-weight:700;cursor:pointer;margin:5px 5px 5px 0}button.alt{background:#263453}input{width:100%%;padding:12px;border:1px solid #334367;border-radius:10px;background:#0c1426;color:white;margin:7px 0 12px}.notice{background:#1d2b4a;padding:12px;border-radius:10px;margin-bottom:18px}.shot{width:100%%;min-height:260px;object-fit:contain;background:#080b13;border-radius:12px;margin-top:14px;border:1px solid #263453}@media(max-width:720px){.grid{grid-template-columns:1fr}}
 </style></head><body><main>
 <div class="top"><div><div class="brand">Avatar MicroEmulator</div><div class="muted">J2ME game control panel</div></div><div class="status%s">● %s</div></div>%s
 <div class="grid"><section class="card"><h2>Emulator</h2><p class="muted">Game: avatar.jar · Display virtual: %s</p>
@@ -224,6 +225,7 @@ def main():
         start_emulator()
     except Exception as exc:
         print('Peringatan emulator: %s' % exc, flush=True)
+    # Port $PORT untuk panel HTTP; port 5901 dipakai khusus oleh x11vnc.
     server = http.server.ThreadingHTTPServer((HOST, PORT), Handler)
     print('Avatar panel listening on port %s' % PORT, flush=True)
     try:
@@ -241,6 +243,6 @@ python3 -m py_compile /opt/avatar/app.py
 SH
 
 WORKDIR /opt/avatar
-EXPOSE 5901
+EXPOSE 5901 8080
 
-CMD ["sh", "-c", "Xvfb :99 -screen 0 320x480x24 -ac +extension GLX >/data/xvfb.log 2>&1 & exec python3 /opt/avatar/app.py"]
+CMD ["sh", "-c", "set -eu; mkdir -p /data; if [ ! -s /data/vnc.pass ]; then x11vnc -storepasswd \"${VNC_PASSWORD:-123456}\" /data/vnc.pass >/dev/null; fi; Xvfb :99 -screen 0 320x480x24 -ac +extension GLX >/data/xvfb.log 2>&1 & x11vnc -display :99 -rfbport 5901 -rfbauth /data/vnc.pass -forever -shared -xkb -noxrecord -noxfixes -noxdamage >/data/x11vnc.log 2>&1 & exec python3 /opt/avatar/app.py"]
