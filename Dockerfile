@@ -6,16 +6,16 @@ ENV DEBIAN_FRONTEND=noninteractive \
     DATA_DIR=/data
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 curl unzip imagemagick xvfb x11vnc x11-utils \
+    && apt-get install -y --no-install-recommends python3 curl unzip imagemagick xvfb x11vnc x11-utils git ant \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /opt/avatar /data \
     && curl -L --fail --retry 3 -o /tmp/avatar.jar https://files.catbox.moe/sllphh.ja \
     && mv /tmp/avatar.jar /opt/avatar/avatar.jar \
-    && curl -L --fail --retry 3 -o /tmp/microemulator.zip 'https://sourceforge.net/projects/microemulator/files/microemulator/2.0.4/microemulator-2.0.4.zip/download' \
-    && unzip -q /tmp/microemulator.zip -d /tmp \
-    && cp /tmp/microemulator-2.0.4/microemulator.jar /opt/avatar/microemulator.jar \
-    && cp /tmp/microemulator-2.0.4/devices/microemu-device-resizable.jar /opt/avatar/microemu-device-resizable.jar \
-    && rm -rf /tmp/microemulator.zip /tmp/microemulator-2.0.4
+    && git clone --depth 1 https://github.com/TASEmulators/freej2me-plus.git /tmp/freej2me-plus \
+    && cd /tmp/freej2me-plus \
+    && ant \
+    && cp build/freej2me.jar /opt/avatar/freej2me.jar \
+    && rm -rf /tmp/freej2me-plus
 
 RUN <<'SH'
 cat > /opt/avatar/app.py <<'PY'
@@ -37,13 +37,11 @@ DISPLAY = os.getenv('DISPLAY', ':99')
 DATA_DIR = os.getenv('DATA_DIR', '/data')
 DEFAULT_PASSWORD = os.getenv('DEFAULT_PASSWORD', '123456')
 JAR = '/opt/avatar/avatar.jar'
-MICROEMU = '/opt/avatar/microemulator.jar'
-DEVICE = '/opt/avatar/microemu-device-resizable.jar'
+FREEJ2ME = '/opt/avatar/freej2me.jar'
 JAD = os.path.join(DATA_DIR, 'avatar.jad')
 PASSWORD_FILE = os.path.join(DATA_DIR, 'password.sha256')
 SCREENSHOT = os.path.join(DATA_DIR, 'microemulator.png')
-CONFIG_DIR = os.path.join(DATA_DIR, '.microemulator')
-CONFIG_FILE = os.path.join(CONFIG_DIR, 'config2.xml')
+SIZE_FILE = os.path.join(DATA_DIR, 'screen.size')
 process = None
 
 
@@ -53,20 +51,15 @@ def hash_password(value):
 
 def ensure_files():
     os.makedirs(DATA_DIR, exist_ok=True)
+    if not os.path.exists(SIZE_FILE):
+        with open(SIZE_FILE, 'w') as f:
+            f.write('393 326\n')
     if not os.path.exists(PASSWORD_FILE):
         with open(PASSWORD_FILE, 'w') as f:
             f.write(hash_password(DEFAULT_PASSWORD))
     if not os.path.exists(JAD):
         with open(JAD, 'w') as f:
-            f.write(
-                'Manifest-Version: 1.0\n'
-                'MIDlet-Name: Avatar World AutoFish\n'
-                'MIDlet-Version: 2.5.8\n'
-                'MIDlet-Vendor: TeaMobi\n'
-                'MIDlet-1: Avatar Auto Fishing,,main.GameMidlet\n'
-                'MIDlet-Jar-URL: file:///opt/avatar/avatar.jar\n'
-                'MIDlet-Jar-Size: %d\n' % os.path.getsize(JAR)
-            )
+            f.write('MIDlet-Jar-URL: file:///opt/avatar/avatar.jar\nMIDlet-Jar-Size: %d\n' % os.path.getsize(JAR))
 
 
 def check_password(value):
@@ -87,11 +80,14 @@ def start_emulator():
     if emulator_running():
         return 'Emulator sudah berjalan'
     ensure_files()
+    with open(SIZE_FILE) as f:
+        width, height = [int(x) for x in f.read().split()[:2]]
     # Opsi -noverify diletakkan sebelum -jar karena itu sintaks Java launcher yang valid.
     command = [
         'java', '-noverify', '-Djava.awt.headless=false',
-        '-cp', MICROEMU + ':' + DEVICE,
-        'org.microemu.app.Main', JAD
+        '-jar', FREEJ2ME,
+        'file:///opt/avatar/avatar.jar',
+        '0', str(width), str(height), '1', '0', '60', '10'
     ]
     log = open(os.path.join(DATA_DIR, 'emulator.log'), 'ab', buffering=0)
     process = subprocess.Popen(
@@ -117,13 +113,8 @@ def make_screenshot():
 def resize_emulator(width, height):
     width = max(120, min(1200, int(width)))
     height = max(120, min(1200, int(height)))
-    os.makedirs(CONFIG_DIR, exist_ok=True)
-    config = ('<config><devices><device default="true"><name>Avatar %dx%d</name>'
-              '<descriptor>org/microemu/device/resizable/device.xml</descriptor>'
-              '<rectangle><x>0</x><y>0</y><width>%d</width><height>%d</height>'
-              '</rectangle></device></devices></config>\n') % (width, height, width, height)
-    with open(CONFIG_FILE, 'w') as f:
-        f.write(config)
+    with open(SIZE_FILE, 'w') as f:
+        f.write('%d %d\n' % (width, height))
     if emulator_running():
         process.terminate()
         try:
@@ -141,12 +132,12 @@ def page(message=''):
     state_text = 'running' if running else 'stopped'
     return '''<!doctype html>
 <html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Avatar MicroEmulator</title>
+<title>Avatar FreeJ2ME</title>
 <style>
 :root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#0b1020;color:#eef2ff;font:15px system-ui,-apple-system,Segoe UI,sans-serif}main{max-width:980px;margin:auto;padding:32px 20px}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}.brand{font-size:25px;font-weight:800}.muted,.small{color:#97a3bf}.small{font-size:13px}.grid{display:grid;grid-template-columns:1.1fr .9fr;gap:18px}.card{background:#121a2e;border:1px solid #263453;border-radius:18px;padding:22px;box-shadow:0 14px 40px #0003}h2{margin:0 0 8px}.status{padding:6px 11px;border-radius:99px;background:#163d32;color:#70e1b4}.status.stopped{background:#442333;color:#ff9db2}button{border:0;border-radius:10px;padding:11px 15px;background:#6d5dfc;color:white;font-weight:700;cursor:pointer;margin:5px 5px 5px 0}button.alt{background:#263453}input{width:100%%;padding:12px;border:1px solid #334367;border-radius:10px;background:#0c1426;color:white;margin:7px 0 12px}.notice{background:#1d2b4a;padding:12px;border-radius:10px;margin-bottom:18px}.shot{width:100%%;min-height:260px;object-fit:contain;background:#080b13;border-radius:12px;margin-top:14px;border:1px solid #263453}@media(max-width:720px){.grid{grid-template-columns:1fr}}
 </style></head><body><main>
-<div class="top"><div><div class="brand">Avatar MicroEmulator</div><div class="muted">J2ME game control panel</div></div><div class="status%s">● %s</div></div>%s
-<div class="grid"><section class="card"><h2>Emulator</h2><p class="muted">Game: avatar.jar · Display virtual: %s</p>
+<div class="top"><div><div class="brand">Avatar FreeJ2ME</div><div class="muted">J2ME game control panel</div></div><div class="status%s">● %s</div></div>%s
+<div class="grid"><section class="card"><h2>Emulator</h2><p class="muted">FreeJ2ME AWT · avatar.jar · Display virtual: %s</p>
 <form method="post" action="/resize"><label>Lebar (px)</label><input type="number" name="width" value="393" min="120" max="1200" required><label>Tinggi (px)</label><input type="number" name="height" value="326" min="120" max="1200" required><button class="alt">Terapkan ukuran dari web</button></form>
 <form method="post" action="/start"><button>Start emulator</button></form>
 <form method="post" action="/screenshot"><button class="alt">Ambil screenshot</button><a href="/screenshot.png" target="_blank"><button type="button" class="alt">Buka gambar</button></a></form>
@@ -277,4 +268,4 @@ SH
 WORKDIR /opt/avatar
 EXPOSE 5901 8080
 
-CMD ["sh", "-c", "mkdir -p /data/.microemulator; if [ ! -s /data/.microemulator/config2.xml ]; then printf '%s\n' '<config><devices><device default=\"true\"><name>Avatar 393x326</name><descriptor>org/microemu/device/resizable/device.xml</descriptor><rectangle><x>0</x><y>0</y><width>393</width><height>326</height></rectangle></device></devices></config>' > /data/.microemulator/config2.xml; fi; if [ ! -s /data/vnc.pass ]; then x11vnc -storepasswd \"${VNC_PASSWORD:-123456}\" /data/vnc.pass >/dev/null 2>&1 || true; fi; Xvfb :99 -screen 0 393x326x24 -ac +extension GLX >/data/xvfb.log 2>&1 & sleep 2; if xdpyinfo -display :99 >/dev/null 2>&1; then (while true; do x11vnc -display :99 -rfbport 5901 -rfbauth /data/vnc.pass -forever -shared -xkb -noxrecord -noxfixes -noxdamage >>/data/x11vnc.log 2>&1 || true; sleep 2; done) & else echo 'Xvfb failed; HTTP panel will still start' >>/data/xvfb.log; fi; exec python3 /opt/avatar/app.py"]
+CMD ["sh", "-c", "mkdir -p /data; if [ ! -s /data/vnc.pass ]; then x11vnc -storepasswd \"${VNC_PASSWORD:-123456}\" /data/vnc.pass >/dev/null 2>&1 || true; fi; Xvfb :99 -screen 0 393x326x24 -ac +extension GLX >/data/xvfb.log 2>&1 & sleep 2; if xdpyinfo -display :99 >/dev/null 2>&1; then (while true; do x11vnc -display :99 -rfbport 5901 -rfbauth /data/vnc.pass -forever -shared -xkb -noxrecord -noxfixes -noxdamage >>/data/x11vnc.log 2>&1 || true; sleep 2; done) & else echo 'Xvfb failed; HTTP panel will still start' >>/data/xvfb.log; fi; exec python3 /opt/avatar/app.py"]
