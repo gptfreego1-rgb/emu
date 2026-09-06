@@ -172,12 +172,8 @@ def start_emulator():
                 windows = result.stdout.strip().split('\n')
                 for i, window in enumerate(windows):
                     if window.strip():
-                        # Resize semua window
-                        subprocess.run(['xdotool', 'windowsize', window.strip(), str(width), str(height)], 
-                                     env={**os.environ, 'DISPLAY': DISPLAY})
-                        # Atur posisi: workspace 1 di kiri, workspace 2 di kanan
-                        x_pos = 0 if i == 0 else width + 10
-                        subprocess.run(['xdotool', 'windowmove', window.strip(), str(x_pos), '0'], 
+                        # Resize semua window ke ukuran yang benar (dengan tinggi tambahan untuk title bar)
+                        subprocess.run(['xdotool', 'windowsize', window.strip(), str(width), str(height + 40)], 
                                      env={**os.environ, 'DISPLAY': DISPLAY})
                 
                 # Tampilkan workspace yang aktif
@@ -212,11 +208,13 @@ def show_active_workspace():
                         # Tampilkan window aktif di posisi 0,0
                         subprocess.run(['xdotool', 'windowmove', window.strip(), '0', '0'], 
                                      env={**os.environ, 'DISPLAY': DISPLAY})
+                        subprocess.run(['xdotool', 'windowraise', window.strip()], 
+                                     env={**os.environ, 'DISPLAY': DISPLAY})
                         subprocess.run(['xdotool', 'windowactivate', window.strip()], 
                                      env={**os.environ, 'DISPLAY': DISPLAY})
                     else:
-                        # Sembunyikan window non-aktif
-                        subprocess.run(['xdotool', 'windowmove', window.strip(), '2000', '0'], 
+                        # Sembunyikan window non-aktif (pindahkan ke bawah layar)
+                        subprocess.run(['xdotool', 'windowmove', window.strip(), '0', '500'], 
                                      env={**os.environ, 'DISPLAY': DISPLAY})
     except Exception as e:
         print(f"Error showing active workspace: {e}", flush=True)
@@ -471,4 +469,4 @@ SH
 WORKDIR /opt/avatar
 EXPOSE 5901 8080
 
-CMD ["sh", "-c", "mkdir -p /data; if [ ! -s /data/vnc.pass ]; then x11vnc -storepasswd \"${VNC_PASSWORD:-123456}\" /data/vnc.pass >/dev/null 2>&1 || true; fi; Xvfb :99 -screen 0 383450x24 -ac +extension GLX >/data/xvfb.log 2>&1 & sleep 2; if xdpyinfo -display :99 >/dev/null 2>&1; then (while true; do x11vnc -display :99 -rfbport 5901 -rfbauth /data/vnc.pass -forever -shared -xkb -noxrecord -noxfixes -noxdamage >>/data/x11vnc.log 2>&1 || true; sleep 2; done) & else echo 'Xvfb failed; HTTP panel will still start' >>/data/xvfb.log; fi; exec python3 /opt/avatar/app.py"]
+CMD ["sh", "-c", "mkdir -p /data; if [ ! -s /data/vnc.pass ]; then x11vnc -storepasswd \"${VNC_PASSWORD:-123456}\" /data/vnc.pass >/dev/null 2>&1 || true; fi; Xvfb :99 -screen 0 393x450x24 -ac +extension GLX >/data/xvfb.log 2>&1 & sleep 2; if xdpyinfo -display :99 >/dev/null 2>&1; then (while true; do x11vnc -display :99 -rfbport 5901 -rfbauth /data/vnc.pass -forever -shared -xkb -noxrecord -noxfixes -noxdamage >>/data/x11vnc.log 2>&1 || true; sleep 2; done) & else echo 'Xvfb failed; HTTP panel will still start' >>/data/xvfb.log; fi; exec python3 /opt/avatar/app.py"]
