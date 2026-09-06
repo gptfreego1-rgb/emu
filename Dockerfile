@@ -27,6 +27,7 @@ import http.server
 import os
 import subprocess
 import time
+import threading
 from urllib.parse import parse_qs, quote, urlparse
 
 HOST = os.getenv('HOST', '0.0.0.0')
@@ -43,6 +44,7 @@ CONFIG_FILE = os.path.join(CONFIG_DIR, 'config2.xml')
 WORKSPACE_FILE = os.path.join(DATA_DIR, 'workspace.active')
 processes = {}  # slot -> process
 workspace_enabled = {1: True, 2: True}
+startup_lock = threading.Lock()
 
 
 def hash_password(value):
@@ -63,6 +65,10 @@ def workspace_config(slot):
 
 def workspace_screenshot(slot):
     return os.path.join(DATA_DIR, 'screenshot_workspace%d.png' % slot)
+
+
+def workspace_log(slot):
+    return os.path.join(DATA_DIR, 'workspace%d.log' % slot)
 
 
 def ensure_files():
@@ -120,7 +126,7 @@ def load_workspace_states():
             values = f.read().strip().split(',')
         workspace_enabled[1] = values[0] == '1'
         workspace_enabled[2] = len(values) > 1 and values[1] == '1'
-    except OSError:
+    except (OSError, IndexError):
         workspace_enabled = {1: True, 2: True}
     return workspace_enabled
 
@@ -130,101 +136,153 @@ def save_workspace_states():
         f.write('%d,%d\n' % (int(workspace_enabled[1]), int(workspace_enabled[2])))
 
 
+def wait_for_windows(timeout=15):
+    """Wait for MicroEmulator windows to appear"""
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        try:
+            result = subprocess.run(
+                ['xdotool', 'search', '--name', 'MicroEmulator'],
+                env={**os.environ, 'DISPLAY': DISPLAY},
+                capture_output=True, text=True, timeout=2
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                windows = result.stdout.strip().splitlines()
+                print(f'Found {len(windows)} MicroEmulator windows')
+                return windows
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError):
+            pass
+        time.sleep(0.5)
+    return []
+
+
 def start_emulator():
     """Start emulator for enabled workspaces"""
-    load_workspace_states()
-    
-    # Kill existing processes
-    for slot, p in list(processes.items()):
-        if p is not None and p.poll() is None:
-            p.terminate()
-            time.sleep(0.5)
-            if p.poll() is None:
-                p.kill()
-    processes.clear()
-    
-    # Start for each enabled workspace
-    for slot in (1, 2):
-        if not workspace_enabled[slot]:
-            continue
+    with startup_lock:
+        load_workspace_states()
+        
+        # Kill existing processes
+        for slot, p in list(processes.items()):
+            if p is not None and p.poll() is None:
+                print(f'Terminating workspace {slot} (PID {p.pid})')
+                p.terminate()
+                try:
+                    p.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    p.kill()
+        processes.clear()
+        
+        # Start for each enabled workspace
+        started = 0
+        for slot in (1, 2):
+            if not workspace_enabled[slot]:
+                print(f'Workspace {slot} disabled, skipping')
+                continue
+                
+            print(f'Starting workspace {slot}...')
+            command = [
+                'java', '-noverify',
+                '-XX:+UseSerialGC', '-XX:TieredStopAtLevel=1',
+                '-Djava.awt.headless=false',
+                '-Dawt.useSystemAAFontSettings=on', '-Dswing.aatext=true',
+                '-Duser.home=' + workspace_dir(slot),
+                '-cp', MICROEMU + ':' + DEVICE,
+                'org.microemu.app.Main', workspace_jad(slot)
+            ]
+            log_file = workspace_log(slot)
+            log = open(log_file, 'ab', buffering=0)
+            p = subprocess.Popen(
+                command, 
+                cwd='/opt/avatar', 
+                env={**os.environ, 'DISPLAY': DISPLAY},
+                stdout=log, 
+                stderr=subprocess.STDOUT
+            )
+            processes[slot] = p
+            started += 1
+            print(f'Started workspace {slot} with PID {p.pid}')
+            time.sleep(1)  # Give time for window to start
+        
+        # Wait for windows and resize them
+        if started > 0:
+            def resize_windows():
+                windows = wait_for_windows(timeout=20)
+                if windows:
+                    print(f'Resizing {len(windows)} windows')
+                    for window in windows:
+                        try:
+                            subprocess.run(
+                                ['xdotool', 'windowsize', window, '390', '310'],
+                                env={**os.environ, 'DISPLAY': DISPLAY},
+                                capture_output=True, timeout=2
+                            )
+                            # Click to activate
+                            subprocess.run(
+                                ['xdotool', 'mousemove', '--window', window, '195', '235', 'click', '1'],
+                                env={**os.environ, 'DISPLAY': DISPLAY},
+                                capture_output=True, timeout=2
+                            )
+                            subprocess.run(
+                                ['xdotool', 'key', '--window', window, 'Return'],
+                                env={**os.environ, 'DISPLAY': DISPLAY},
+                                capture_output=True, timeout=2
+                            )
+                            print(f'Resized window {window}')
+                        except Exception as e:
+                            print(f'Error resizing window {window}: {e}')
+                else:
+                    print('Warning: No MicroEmulator windows found after startup')
             
-        command = [
-            'java', '-noverify',
-            '-XX:+UseSerialGC', '-XX:TieredStopAtLevel=1',
-            '-Djava.awt.headless=false',
-            '-Dawt.useSystemAAFontSettings=on', '-Dswing.aatext=true',
-            '-Duser.home=' + workspace_dir(slot),
-            '-cp', MICROEMU + ':' + DEVICE,
-            'org.microemu.app.Main', workspace_jad(slot)
-        ]
-        log = open(os.path.join(DATA_DIR, 'workspace%d.log' % slot), 'ab', buffering=0)
-        p = subprocess.Popen(command, cwd='/opt/avatar', env={**os.environ, 'DISPLAY': DISPLAY}, 
-                           stdout=log, stderr=subprocess.STDOUT)
-        processes[slot] = p
-        print(f'Started workspace {slot} with PID {p.pid}')
-    
-    # Resize windows after they start
-    if processes:
-        subprocess.Popen([
-            'sh', '-c',
-            "exec >>/data/autostart.log 2>&1; "
-            "sleep 3; "
-            "windows=$(xdotool search --name 'MicroEmulator' 2>/dev/null || true); "
-            "for window in $windows; do "
-            "xdotool windowsize $window 390 310; "
-            "xdotool mousemove --window $window 195 235 click 1; "
-            "xdotool key --window $window Return; "
-            "done"
-        ], env={**os.environ, 'DISPLAY': DISPLAY})
-    
-    return 'Emulator started for enabled workspaces'
+            threading.Thread(target=resize_windows, daemon=True).start()
+        
+        return f'Started {started} workspace(s)'
 
 
 def make_screenshot(selection='both'):
     """Take screenshot for workspace(s)"""
-    windows = subprocess.check_output(['xdotool', 'search', '--name', 'MicroEmulator'], 
-                                     env={**os.environ, 'DISPLAY': DISPLAY}, text=True).splitlines()
+    windows = wait_for_windows(timeout=2)
+    if not windows:
+        raise RuntimeError('No MicroEmulator windows found. Make sure emulator is running.')
     
-    if len(windows) < 1:
-        raise RuntimeError('MicroEmulator window not available')
-    
-    # Map windows to workspaces (assuming windows appear in order)
+    # Map windows to slots (first window = workspace 1, second = workspace 2)
     windows_by_slot = {}
-    for i, window in enumerate(windows, 1):
-        if i <= 2:
-            windows_by_slot[i] = window
+    for i, window in enumerate(windows[:2], 1):
+        windows_by_slot[i] = window
     
-    shots = []
-    if selection == 'both':
-        slots = [1, 2]
-    else:
-        slots = [int(selection)]
+    slots = [1, 2] if selection == 'both' else [int(selection)]
+    results = []
     
     for slot in slots:
         if slot not in windows_by_slot:
             continue
+            
         window = windows_by_slot[slot]
         output_file = workspace_screenshot(slot)
         
-        # Take screenshot
-        result = subprocess.run([
-            'import', '-display', DISPLAY, '-window', window, 
-            '-crop', '393x326+0+50', '-type', 'TrueColor', '-depth', '8', 'PNG24:' + output_file
-        ], capture_output=True)
-        
-        if result.returncode != 0:
-            raise RuntimeError(f'Failed to screenshot workspace {slot}: {result.stderr.decode(errors="replace")}')
-        
-        # Enhance image
-        subprocess.run([
-            'convert', output_file, '-trim', '+repage', '-filter', 'Lanczos',
-            '-resize', '393x326^', '-gravity', 'center', '-extent', '393x326',
-            '-type', 'TrueColor', '-depth', '8', '-quality', '100', 'PNG24:' + output_file
-        ], capture_output=True, check=True)
-        
-        shots.append(output_file)
+        try:
+            # Take screenshot
+            subprocess.run([
+                'import', '-display', DISPLAY, '-window', window, 
+                '-crop', '393x326+0+50', '-type', 'TrueColor', 
+                '-depth', '8', 'PNG24:' + output_file
+            ], capture_output=True, check=True, timeout=5)
+            
+            # Enhance image
+            subprocess.run([
+                'convert', output_file, '-trim', '+repage', 
+                '-filter', 'Lanczos', '-resize', '393x326^',
+                '-gravity', 'center', '-extent', '393x326',
+                '-type', 'TrueColor', '-depth', '8', 
+                '-quality', '100', 'PNG24:' + output_file
+            ], capture_output=True, check=True, timeout=5)
+            
+            results.append(output_file)
+            print(f'Screenshot saved for workspace {slot}')
+        except subprocess.CalledProcessError as e:
+            print(f'Error capturing screenshot for workspace {slot}: {e.stderr}')
+            raise RuntimeError(f'Failed to screenshot workspace {slot}')
     
-    return shots
+    return results
 
 
 def set_workspace(slot, enabled):
@@ -348,7 +406,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 output_file = workspace_screenshot(slot)
                 
                 # Take fresh screenshot
-                selection = parse_qs(urlparse(self.path).query).get('selection', ['both'])[0]
                 make_screenshot(str(slot))
                 
                 with open(output_file, 'rb') as f:
@@ -373,8 +430,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         
         try:
             if path == '/start':
-                start_emulator()
-                message = 'Emulators restarted'
+                message = start_emulator()
             elif path == '/workspace':
                 slot = int(fields.get('slot', ['1'])[0])
                 current_state = workspace_enabled[slot]
@@ -406,6 +462,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
         except Exception as exc:
             message = f'Error: {str(exc)}'
+            print(f'POST error: {exc}')
         
         self.send_response(303)
         self.send_header('Location', '/?message=' + quote(message))
