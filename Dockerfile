@@ -146,9 +146,12 @@ def start_emulator():
     process = workspace_processes[0]
     subprocess.Popen([
         'sh', '-c',
-        "sleep 3; for window in $(xdotool search --name 'MicroEmulator' 2>/dev/null); do "
+        "exec >>/data/autostart.log 2>&1; echo '[autostart] waiting for MicroEmulator windows'; "
+        "windows=''; for i in $(seq 1 30); do windows=$(xdotool search --name 'MicroEmulator' 2>/dev/null || true); "
+        "[ -n \"$windows\" ] && break; sleep 1; done; "
+        "echo \"[autostart] windows: $windows\"; for window in $windows; do "
         "xdotool windowsize \"$window\" %d %d; xdotool mousemove --window \"$window\" 195 235 click 1; "
-        "xdotool key --window \"$window\" Return; done" % (width, height)
+        "xdotool key --window \"$window\" Return; echo \"[autostart] started $window\"; done" % (width, height)
     ], env={**os.environ, 'DISPLAY': DISPLAY})
     return 'Dua workspace berhasil dimulai'
 
@@ -363,4 +366,4 @@ SH
 WORKDIR /opt/avatar
 EXPOSE 5901 8080
 
-CMD ["sh", "-c", "mkdir -p /data; if [ ! -s /data/vnc.pass ]; then x11vnc -storepasswd \"${VNC_PASSWORD:-123456}\" /data/vnc.pass >/dev/null 2>&1 || true; fi; Xvfb :99 -screen 0 393x450x24 -ac +extension GLX >/data/xvfb.log 2>&1 & sleep 2; if xdpyinfo -display :99 >/dev/null 2>&1; then (while true; do x11vnc -display :99 -rfbport 5901 -rfbauth /data/vnc.pass -forever -shared -xkb -noxrecord -noxfixes -noxdamage >>/data/x11vnc.log 2>&1 || true; sleep 2; done) & else echo 'Xvfb failed; HTTP panel will still start' >>/data/xvfb.log; fi; exec python3 /opt/avatar/app.py"]
+CMD ["sh", "-c", "set -eu; mkdir -p /data; echo '[startup] container starting' >>/data/startup.log; if [ ! -s /data/vnc.pass ]; then x11vnc -storepasswd \"${VNC_PASSWORD:-123456}\" /data/vnc.pass >/dev/null 2>&1 || true; fi; Xvfb :99 -screen 0 393x450x24 -ac +extension GLX >/data/xvfb.log 2>&1 & echo $! >/data/xvfb.pid; for i in $(seq 1 20); do if xdpyinfo -display :99 >/dev/null 2>&1; then break; fi; sleep 1; done; xdpyinfo -display :99 >>/data/startup.log 2>&1 || true; (while true; do x11vnc -display :99 -rfbport 5901 -rfbauth /data/vnc.pass -forever -shared -xkb -noxrecord -noxfixes -noxdamage >>/data/x11vnc.log 2>&1 || true; sleep 2; done) & echo $! >/data/x11vnc.pid; exec python3 /opt/avatar/app.py"]
