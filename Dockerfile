@@ -1,21 +1,20 @@
-FROM eclipse-temurin:17-jre-alpine
+FROM eclipse-temurin:17-jre-jammy
 
-ENV \
+ENV DEBIAN_FRONTEND=noninteractive \
     DISPLAY=:99 \
     PORT=8080 \
-    DATA_DIR=/data \
-    MALLOC_ARENA_MAX=2
+    DATA_DIR=/data
 
-RUN apk add --no-cache \
-        python3 curl unzip imagemagick xvfb x11vnc xdpyinfo xdotool \
-        fontconfig ttf-dejavu \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 curl unzip imagemagick xvfb x11vnc x11-utils xdotool \
+    && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /opt/avatar /data \
     && curl -L --fail --retry 3 -o /opt/avatar/avatar.jar https://files.catbox.moe/sllphh.ja \
     && curl -L --fail --retry 3 -o /tmp/microemulator.zip 'https://sourceforge.net/projects/microemulator/files/microemulator/2.0.4/microemulator-2.0.4.zip/download' \
     && unzip -q /tmp/microemulator.zip -d /tmp \
     && cp /tmp/microemulator-2.0.4/microemulator.jar /opt/avatar/microemulator.jar \
     && cp /tmp/microemulator-2.0.4/devices/microemu-device-resizable.jar /opt/avatar/microemu-device-resizable.jar \
-    && rm -rf /tmp/microemulator.zip /tmp/microemulator-2.0.4 /var/cache/apk/*
+    && rm -rf /tmp/microemulator.zip /tmp/microemulator-2.0.4
 
 RUN <<'SH'
 cat > /opt/avatar/app.py <<'PY'
@@ -53,30 +52,8 @@ def hash_password(value):
     return hashlib.sha256(value.encode('utf-8')).hexdigest()
 
 
-def workspace_dir(slot):
-    return os.path.join(DATA_DIR, 'workspace%d' % slot)
-
-
-def workspace_jad(slot):
-    return os.path.join(workspace_dir(slot), 'avatar.jad')
-
-
-def workspace_config(slot):
-    return os.path.join(workspace_dir(slot), '.microemulator', 'config2.xml')
-
-
 def ensure_files():
     os.makedirs(DATA_DIR, exist_ok=True)
-    for slot in (1, 2):
-        home = workspace_dir(slot)
-        config = workspace_config(slot)
-        os.makedirs(os.path.dirname(config), exist_ok=True)
-        if not os.path.exists(config):
-            with open(config, 'w') as f:
-                f.write('<config><devices><device default="true"><name>Avatar resizable</name><descriptor>org/microemu/device/resizable/device.xml</descriptor><rectangle><x>0</x><y>0</y><width>390</width><height>310</height></rectangle></device></devices></config>\n')
-        if not os.path.exists(workspace_jad(slot)):
-            with open(workspace_jad(slot), 'w') as f:
-                f.write('MIDlet-Jar-URL: file:///opt/avatar/avatar.jar\nMIDlet-Jar-Size: %d\n' % os.path.getsize(JAR))
     if not os.path.exists(SIZE_FILE):
         with open(SIZE_FILE, 'w') as f:
             f.write('390 310\n')
@@ -125,21 +102,19 @@ def start_emulator():
     with open(SIZE_FILE) as f:
         width, height = [int(x) for x in f.read().split()[:2]]
     # Opsi -noverify diletakkan sebelum -jar karena itu sintaks Java launcher yang valid.
+    command = [
+        'java', '-noverify', '-Djava.awt.headless=false',
+        '-Dawt.useSystemAAFontSettings=on', '-Dswing.aatext=true',
+        '-Duser.home=' + DATA_DIR,
+        '-cp', MICROEMU + ':' + DEVICE,
+        'org.microemu.app.Main', JAD
+    ]
     workspace_processes = []
     states = workspace_states()
     for slot in (1, 2):
         if not states[slot - 1]:
             workspace_processes.append(None)
             continue
-        command = [
-            'java', '-noverify',
-            '-XX:+UseSerialGC', '-XX:TieredStopAtLevel=1',
-            '-Djava.awt.headless=false',
-            '-Dawt.useSystemAAFontSettings=on', '-Dswing.aatext=true',
-            '-Duser.home=' + workspace_dir(slot),
-            '-cp', MICROEMU + ':' + DEVICE,
-            'org.microemu.app.Main', workspace_jad(slot)
-        ]
         log = open(os.path.join(DATA_DIR, 'workspace%d.log' % slot), 'ab', buffering=0)
         p = subprocess.Popen(command, cwd='/opt/avatar', env={**os.environ, 'DISPLAY': DISPLAY}, stdout=log, stderr=subprocess.STDOUT)
         workspace_processes.append(p)
