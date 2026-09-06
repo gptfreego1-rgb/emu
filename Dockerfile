@@ -50,14 +50,9 @@ def hash_password(value):
     return hashlib.sha256(value.encode('utf-8')).hexdigest()
 
 
-def get_workspace_config_dir(workspace_id):
-    """Mendapatkan direktori konfigurasi untuk workspace tertentu"""
+def get_workspace_dir(workspace_id):
+    """Mendapatkan direktori untuk workspace tertentu"""
     return os.path.join(DATA_DIR, '.microemulator-workspace%d' % workspace_id)
-
-
-def get_workspace_config_file(workspace_id):
-    """Mendapatkan file konfigurasi untuk workspace tertentu"""
-    return os.path.join(get_workspace_config_dir(workspace_id), 'config2.xml')
 
 
 def ensure_files():
@@ -73,15 +68,15 @@ def ensure_files():
     with open(SIZE_FILE) as f:
         width, height = [int(x) for x in f.read().split()[:2]]
     
-    # Buat konfigurasi terpisah untuk setiap workspace
+    # Buat direktori untuk setiap workspace
     for workspace_id in range(1, 3):
-        config_dir = get_workspace_config_dir(workspace_id)
-        config_file = get_workspace_config_file(workspace_id)
-        
+        workspace_dir = get_workspace_dir(workspace_id)
+        config_dir = os.path.join(workspace_dir, '.microemulator')
         os.makedirs(config_dir, exist_ok=True)
-        if not os.path.exists(config_file):
-            with open(config_file, 'w') as f:
-                f.write('<config><devices><device default="true"><name>Avatar resizable</name><descriptor>org/microemu/device/resizable/device.xml</descriptor><rectangle><x>0</x><y>0</y><width>%d</width><height>%d</height></rectangle></device></devices></config>\n' % (width, height))
+        config_file = os.path.join(config_dir, 'config2.xml')
+        
+        with open(config_file, 'w') as f:
+            f.write('<config><devices><device default="true"><name>Avatar resizable</name><descriptor>org/microemu/device/resizable/device.xml</descriptor><rectangle><x>0</x><y>0</y><width>%d</width><height>%d</height></rectangle></device></devices></config>\n' % (width, height))
     
     if not os.path.exists(PASSWORD_FILE):
         with open(PASSWORD_FILE, 'w') as f:
@@ -129,21 +124,14 @@ def start_emulator():
             workspace_processes.append(None)
             continue
         
-        # Gunakan direktori konfigurasi terpisah untuk setiap workspace
-        workspace_config_dir = get_workspace_config_dir(slot)
-        
-        # Pastikan config file ada dengan ukuran yang benar
-        config_file = get_workspace_config_file(slot)
-        os.makedirs(workspace_config_dir, exist_ok=True)
-        with open(config_file, 'w') as f:
-            f.write('<config><devices><device default="true"><name>Avatar resizable</name><descriptor>org/microemu/device/resizable/device.xml</descriptor><rectangle><x>0</x><y>0</y><width>%d</width><height>%d</height></rectangle></device></devices></config>\n' % (width, height))
+        # Gunakan direktori terpisah untuk setiap workspace
+        workspace_dir = get_workspace_dir(slot)
         
         # Opsi -noverify diletakkan sebelum -jar karena itu sintaks Java launcher yang valid.
         command = [
             'java', '-noverify', '-Djava.awt.headless=false',
             '-Dawt.useSystemAAFontSettings=on', '-Dswing.aatext=true',
-            '-Duser.home=' + workspace_config_dir,
-            '-Dmicroemulator.config=' + config_file,
+            '-Duser.home=' + workspace_dir,
             '-cp', MICROEMU + ':' + DEVICE,
             'org.microemu.app.Main', JAD
         ]
@@ -152,16 +140,30 @@ def start_emulator():
         p = subprocess.Popen(command, cwd='/opt/avatar', env={**os.environ, 'DISPLAY': DISPLAY}, stdout=log, stderr=subprocess.STDOUT)
         workspace_processes.append(p)
     
-    process = workspace_processes[0]
+    process = workspace_processes[0] if workspace_processes and workspace_processes[0] else None
+    
     # Auto-resize untuk setiap window workspace
-    subprocess.Popen([
-        'sh', '-c',
-        "sleep 3; "
-        "windows=$(xdotool search --name 'MicroEmulator' 2>/dev/null); "
-        "for window in $windows; do "
-        "  xdotool windowsize \"$window\" %d %d; "
-        "done" % (width, height)
-    ], env={**os.environ, 'DISPLAY': DISPLAY})
+    def resize_windows():
+        time.sleep(3)
+        try:
+            # Cari semua window MicroEmulator
+            result = subprocess.run(['xdotool', 'search', '--name', 'MicroEmulator'], 
+                                  capture_output=True, text=True, env={**os.environ, 'DISPLAY': DISPLAY})
+            if result.returncode == 0:
+                windows = result.stdout.strip().split('\n')
+                for window in windows:
+                    if window.strip():
+                        subprocess.run(['xdotool', 'windowsize', window.strip(), str(width), str(height)], 
+                                     env={**os.environ, 'DISPLAY': DISPLAY})
+        except Exception as e:
+            print(f"Error resizing windows: {e}", flush=True)
+    
+    # Jalankan resize dalam thread terpisah
+    import threading
+    resize_thread = threading.Thread(target=resize_windows)
+    resize_thread.daemon = True
+    resize_thread.start()
+    
     return 'Dua workspace berhasil dimulai'
 
 
@@ -206,9 +208,10 @@ def resize_emulator(width, height):
     
     # Update konfigurasi untuk semua workspace
     for workspace_id in range(1, 3):
-        config_dir = get_workspace_config_dir(workspace_id)
+        workspace_dir = get_workspace_dir(workspace_id)
+        config_dir = os.path.join(workspace_dir, '.microemulator')
         os.makedirs(config_dir, exist_ok=True)
-        config_file = get_workspace_config_file(workspace_id)
+        config_file = os.path.join(config_dir, 'config2.xml')
         with open(config_file, 'w') as f:
             f.write('<config><devices><device default="true"><name>Avatar resizable</name><descriptor>org/microemu/device/resizable/device.xml</descriptor><rectangle><x>0</x><y>0</y><width>%d</width><height>%d</height></rectangle></device></devices></config>\n' % (width, height))
     
