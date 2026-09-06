@@ -69,15 +69,19 @@ def ensure_files():
         with open(WORKSPACE_FILE, 'w') as f:
             f.write('1,1\n')
     
+    # Baca ukuran dari SIZE_FILE
+    with open(SIZE_FILE) as f:
+        width, height = [int(x) for x in f.read().split()[:2]]
+    
     # Buat konfigurasi terpisah untuk setiap workspace
     for workspace_id in range(1, 3):
         config_dir = get_workspace_config_dir(workspace_id)
         config_file = get_workspace_config_file(workspace_id)
         
+        os.makedirs(config_dir, exist_ok=True)
         if not os.path.exists(config_file):
-            os.makedirs(config_dir, exist_ok=True)
             with open(config_file, 'w') as f:
-                f.write('<config><devices><device default="true"><name>Avatar resizable</name><descriptor>org/microemu/device/resizable/device.xml</descriptor><rectangle><x>0</x><y>0</y><width>390</width><height>310</height></rectangle></device></devices></config>\n')
+                f.write('<config><devices><device default="true"><name>Avatar resizable</name><descriptor>org/microemu/device/resizable/device.xml</descriptor><rectangle><x>0</x><y>0</y><width>%d</width><height>%d</height></rectangle></device></devices></config>\n' % (width, height))
     
     if not os.path.exists(PASSWORD_FILE):
         with open(PASSWORD_FILE, 'w') as f:
@@ -128,11 +132,18 @@ def start_emulator():
         # Gunakan direktori konfigurasi terpisah untuk setiap workspace
         workspace_config_dir = get_workspace_config_dir(slot)
         
+        # Pastikan config file ada dengan ukuran yang benar
+        config_file = get_workspace_config_file(slot)
+        os.makedirs(workspace_config_dir, exist_ok=True)
+        with open(config_file, 'w') as f:
+            f.write('<config><devices><device default="true"><name>Avatar resizable</name><descriptor>org/microemu/device/resizable/device.xml</descriptor><rectangle><x>0</x><y>0</y><width>%d</width><height>%d</height></rectangle></device></devices></config>\n' % (width, height))
+        
         # Opsi -noverify diletakkan sebelum -jar karena itu sintaks Java launcher yang valid.
         command = [
             'java', '-noverify', '-Djava.awt.headless=false',
             '-Dawt.useSystemAAFontSettings=on', '-Dswing.aatext=true',
             '-Duser.home=' + workspace_config_dir,
+            '-Dmicroemulator.config=' + config_file,
             '-cp', MICROEMU + ':' + DEVICE,
             'org.microemu.app.Main', JAD
         ]
@@ -142,10 +153,14 @@ def start_emulator():
         workspace_processes.append(p)
     
     process = workspace_processes[0]
+    # Auto-resize untuk setiap window workspace
     subprocess.Popen([
         'sh', '-c',
-        "sleep 3; window=$(xdotool search --name 'MicroEmulator' 2>/dev/null | head -1); "
-        "if [ -n \"$window\" ]; then xdotool windowsize \"$window\" %d %d; fi" % (width, height)
+        "sleep 3; "
+        "windows=$(xdotool search --name 'MicroEmulator' 2>/dev/null); "
+        "for window in $windows; do "
+        "  xdotool windowsize \"$window\" %d %d; "
+        "done" % (width, height)
     ], env={**os.environ, 'DISPLAY': DISPLAY})
     return 'Dua workspace berhasil dimulai'
 
@@ -198,11 +213,10 @@ def resize_emulator(width, height):
             f.write('<config><devices><device default="true"><name>Avatar resizable</name><descriptor>org/microemu/device/resizable/device.xml</descriptor><rectangle><x>0</x><y>0</y><width>%d</width><height>%d</height></rectangle></device></devices></config>\n' % (width, height))
     
     if emulator_running():
-        process.terminate()
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
+        for p in workspace_processes:
+            if p is not None and p.poll() is None:
+                p.terminate()
+        time.sleep(1)
     start_emulator()
     return width, height
 
