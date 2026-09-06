@@ -238,7 +238,7 @@ def make_screenshot():
     ensure_files()
     raw = SCREENSHOT + '.raw.png'
     try:
-        # Ambil screenshot dari window yang aktif
+        # Ambil screenshot langsung dari window yang aktif tanpa crop
         active = get_active_workspace()
         result = subprocess.run(['xdotool', 'search', '--name', 'MicroEmulator'], 
                               capture_output=True, text=True, env={**os.environ, 'DISPLAY': DISPLAY})
@@ -246,20 +246,23 @@ def make_screenshot():
             windows = result.stdout.strip().split('\n')
             if len(windows) >= active:
                 window = windows[active - 1]
-                command = ['import', '-display', DISPLAY, '-window', window, '-crop', '393x326+0+50', '-type', 'TrueColor', '-depth', '8', 'PNG24:' + raw]
+                # Screenshot langsung dari window tanpa crop
+                command = ['import', '-display', DISPLAY, '-window', window, '-type', 'TrueColor', '-depth', '8', 'PNG24:' + raw]
             else:
                 raise IndexError("Window tidak ditemukan")
         else:
             raise subprocess.CalledProcessError(result.returncode, 'xdotool')
     except (subprocess.CalledProcessError, IndexError):
-        command = ['import', '-display', DISPLAY, '-window', 'root', '-crop', '393x326+0+0', '-type', 'TrueColor', '-depth', '8', 'PNG24:' + raw]
+        # Fallback ke root window jika window tidak ditemukan
+        command = ['import', '-display', DISPLAY, '-window', 'root', '-type', 'TrueColor', '-depth', '8', 'PNG24:' + raw]
+    
     result = subprocess.run(command, capture_output=True)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.decode(errors='replace') or 'Gagal mengambil screenshot')
+    
+    # Optimasi gambar tanpa crop atau resize
     enhanced = subprocess.run([
-        'convert', raw, '-trim', '+repage', '-filter', 'Lanczos',
-        '-resize', '393x326^', '-gravity', 'center', '-extent', '393x326',
-        '-type', 'TrueColor', '-depth', '8', '-quality', '100', 'PNG24:' + SCREENSHOT
+        'convert', raw, '-type', 'TrueColor', '-depth', '8', '-quality', '100', 'PNG24:' + SCREENSHOT
     ], capture_output=True)
     if enhanced.returncode != 0:
         raise RuntimeError(enhanced.stderr.decode(errors='replace') or 'Gagal meningkatkan screenshot')
@@ -320,7 +323,7 @@ def page(message=''):
 <form method="post" action="/workspace"><button name="slot" value="1" class="alt">Workspace 1: %s</button><button name="slot" value="2" class="alt">Workspace 2: %s</button></form>
 <form method="post" action="/start"><button>Start emulator</button></form>
 <form method="post" action="/screenshot"><button class="alt">Ambil screenshot</button><a href="/screenshot.png" target="_blank"><button type="button" class="alt">Buka gambar</button></a></form>
-<p class="small">Screenshot diambil dari framebuffer Xvfb MicroEmulator.</p><img class="shot" src="/screenshot.png?%s" alt="Screenshot emulator" onerror="this.style.display='none'"></section>
+<p class="small">Screenshot diambil dari window MicroEmulator aktif.</p><img class="shot" src="/screenshot.png?%s" alt="Screenshot emulator" onerror="this.style.display='none'"></section>
 <section class="card"><h2>Pindah Workspace</h2><p class="muted">Pindahkan tampilan VNC antar workspace</p>
 <div class="workspace-info">
 <strong>Workspace aktif:</strong> Workspace %d<br>
