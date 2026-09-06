@@ -146,30 +146,35 @@ def start_emulator():
     process = workspace_processes[0]
     subprocess.Popen([
         'sh', '-c',
-        "sleep 3; window=$(xdotool search --name 'MicroEmulator' 2>/dev/null | head -1); "
-        "if [ -n \"$window\" ]; then xdotool windowsize \"$window\" %d %d; fi" % (width, height)
+        "sleep 3; for window in $(xdotool search --name 'MicroEmulator' 2>/dev/null); do "
+        "xdotool windowsize \"$window\" %d %d; xdotool key --window \"$window\" Return; done" % (width, height)
     ], env={**os.environ, 'DISPLAY': DISPLAY})
     return 'Dua workspace berhasil dimulai'
 
 
-def make_screenshot():
+def make_screenshot(selection='both'):
     ensure_files()
-    raw = SCREENSHOT + '.raw.png'
-    try:
-        window = subprocess.check_output(['xdotool', 'search', '--name', 'MicroEmulator'], env={**os.environ, 'DISPLAY': DISPLAY}, text=True).splitlines()[0]
-        command = ['import', '-display', DISPLAY, '-window', window, '-crop', '393x326+0+50', '-type', 'TrueColor', '-depth', '8', 'PNG24:' + raw]
-    except (subprocess.CalledProcessError, IndexError):
-        command = ['import', '-display', DISPLAY, '-window', 'root', '-crop', '393x326+0+0', '-type', 'TrueColor', '-depth', '8', 'PNG24:' + raw]
-    result = subprocess.run(command, capture_output=True)
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.decode(errors='replace') or 'Gagal mengambil screenshot')
-    enhanced = subprocess.run([
-        'convert', raw, '-trim', '+repage', '-filter', 'Lanczos',
-        '-resize', '393x326^', '-gravity', 'center', '-extent', '393x326',
-        '-type', 'TrueColor', '-depth', '8', '-quality', '100', 'PNG24:' + SCREENSHOT
-    ], capture_output=True)
-    if enhanced.returncode != 0:
-        raise RuntimeError(enhanced.stderr.decode(errors='replace') or 'Gagal meningkatkan screenshot')
+    windows = subprocess.check_output(['xdotool', 'search', '--name', 'MicroEmulator'], env={**os.environ, 'DISPLAY': DISPLAY}, text=True).splitlines()
+    if len(windows) < 1:
+        raise RuntimeError('Window MicroEmulator belum tersedia')
+    targets = windows if selection == 'both' else [windows[0 if selection == '1' else min(1, len(windows) - 1)]]
+    shots = []
+    for index, window in enumerate(targets, 1):
+        raw = SCREENSHOT + '.%d.raw.png' % index
+        result = subprocess.run(['import', '-display', DISPLAY, '-window', window, '-crop', '393x326+0+50', '-type', 'TrueColor', '-depth', '8', 'PNG24:' + raw], capture_output=True)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.decode(errors='replace') or 'Gagal mengambil screenshot')
+        shot = SCREENSHOT + '.%d.png' % index
+        enhanced = subprocess.run(['convert', raw, '-trim', '+repage', '-filter', 'Lanczos', '-resize', '393x326^', '-gravity', 'center', '-extent', '393x326', '-type', 'TrueColor', '-depth', '8', '-quality', '100', 'PNG24:' + shot], capture_output=True)
+        if enhanced.returncode != 0:
+            raise RuntimeError(enhanced.stderr.decode(errors='replace') or 'Gagal meningkatkan screenshot')
+        shots.append(shot)
+    if len(shots) == 1:
+        os.replace(shots[0], SCREENSHOT)
+    else:
+        result = subprocess.run(['convert', shots[0], shots[1], '-append', '-quality', '100', 'PNG24:' + SCREENSHOT], capture_output=True)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.decode(errors='replace') or 'Gagal menggabungkan screenshot')
 
 
 def set_workspace(slot, enabled):
@@ -219,7 +224,7 @@ def page(message=''):
 <div class="grid"><section class="card"><h2>Emulator</h2><p class="muted">MicroEmulator · avatar.jar · Display virtual: %s</p>
 <form method="post" action="/workspace"><button name="slot" value="1" class="alt">Workspace 1: %s</button><button name="slot" value="2" class="alt">Workspace 2: %s</button></form>
 <form method="post" action="/start"><button>Start emulator</button></form>
-<form method="post" action="/screenshot"><button class="alt">Ambil screenshot</button><a href="/screenshot.png" target="_blank"><button type="button" class="alt">Buka gambar</button></a></form>
+<form method="post" action="/screenshot"><select name="selection"><option value="1">Workspace 1</option><option value="2">Workspace 2</option><option value="both" selected>Keduanya</option></select><button class="alt">Ambil screenshot</button><a href="/screenshot.png" target="_blank"><button type="button" class="alt">Buka gambar</button></a></form>
 <p class="small">Screenshot diambil dari framebuffer Xvfb MicroEmulator.</p><img class="shot" src="/screenshot.png?%s" alt="Screenshot emulator" onerror="this.style.display='none'"></section>
 <section class="card"><h2>Change password</h2><p class="muted">Hanya password login panel yang berubah. Emulator tetap berjalan.</p>
 <form method="post" action="/change-password"><label>Password saat ini</label><input type="password" name="current" required><label>Password baru</label><input type="password" name="new" minlength="6" required><label>Ulangi password baru</label><input type="password" name="confirm" minlength="6" required><button>Simpan password</button></form>
@@ -266,7 +271,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_html(page(message))
         elif path == '/screenshot.png':
             try:
-                make_screenshot()
+                selection = parse_qs(urlparse(self.path).query).get('selection', ['both'])[0]
+                make_screenshot(selection)
                 with open(SCREENSHOT, 'rb') as f:
                     data = f.read()
                 self.send_response(200)
@@ -303,8 +309,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 start_emulator()
                 message = 'Workspace %s %s' % (slot, 'diaktifkan' if states[index] else 'dinonaktifkan')
             elif path == '/screenshot':
-                make_screenshot()
-                message = 'Screenshot berhasil diperbarui'
+                selection = fields.get('selection', ['both'])[0]
+                make_screenshot(selection)
+                message = 'Screenshot %s berhasil diperbarui' % ('keduanya' if selection == 'both' else 'Workspace ' + selection)
             elif path == '/change-password':
                 current = fields.get('current', [''])[0]
                 new = fields.get('new', [''])[0]
