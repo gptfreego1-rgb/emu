@@ -6,7 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     DATA_DIR=/data
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 curl unzip imagemagick xvfb x11vnc x11-utils xdotool \
+    && apt-get install -y --no-install-recommends python3 curl unzip imagemagick xvfb x11vnc x11-utils xdotool x11-apps \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /opt/avatar /data \
     && curl -L --fail --retry 3 -o /opt/avatar/avatar.jar https://files.catbox.moe/sllphh.ja \
@@ -127,6 +127,22 @@ def set_active_workspace(workspace_id):
         f.write('%d\n' % workspace_id)
 
 
+def get_window_id(workspace_id):
+    """Mendapatkan window ID untuk workspace tertentu"""
+    try:
+        result = subprocess.run(['xdotool', 'search', '--name', 'MicroEmulator'], 
+                              capture_output=True, text=True, env={**os.environ, 'DISPLAY': DISPLAY})
+        if result.returncode == 0:
+            windows = result.stdout.strip().split('\n')
+            # Filter window yang valid
+            valid_windows = [w for w in windows if w.strip()]
+            if len(valid_windows) >= workspace_id:
+                return valid_windows[workspace_id - 1]
+    except Exception:
+        pass
+    return None
+
+
 def start_emulator():
     global process, workspace_processes
     if emulator_running():
@@ -170,11 +186,11 @@ def start_emulator():
                                   capture_output=True, text=True, env={**os.environ, 'DISPLAY': DISPLAY})
             if result.returncode == 0:
                 windows = result.stdout.strip().split('\n')
-                for i, window in enumerate(windows):
-                    if window.strip():
-                        # Resize semua window ke ukuran yang benar (dengan tinggi tambahan untuk title bar)
-                        subprocess.run(['xdotool', 'windowsize', window.strip(), str(width), str(height + 40)], 
-                                     env={**os.environ, 'DISPLAY': DISPLAY})
+                valid_windows = [w for w in windows if w.strip()]
+                for i, window in enumerate(valid_windows):
+                    # Resize semua window ke ukuran yang benar (dengan tinggi tambahan untuk title bar)
+                    subprocess.run(['xdotool', 'windowsize', window, str(width), str(height + 40)], 
+                                 env={**os.environ, 'DISPLAY': DISPLAY})
                 
                 # Tampilkan workspace yang aktif
                 show_active_workspace()
@@ -200,22 +216,24 @@ def show_active_workspace():
                               capture_output=True, text=True, env={**os.environ, 'DISPLAY': DISPLAY})
         if result.returncode == 0:
             windows = result.stdout.strip().split('\n')
+            valid_windows = [w for w in windows if w.strip()]
             
-            for i, window in enumerate(windows):
-                if window.strip():
-                    workspace_id = i + 1
-                    if workspace_id == active:
-                        # Tampilkan window aktif di posisi 0,0
-                        subprocess.run(['xdotool', 'windowmove', window.strip(), '0', '0'], 
-                                     env={**os.environ, 'DISPLAY': DISPLAY})
-                        subprocess.run(['xdotool', 'windowraise', window.strip()], 
-                                     env={**os.environ, 'DISPLAY': DISPLAY})
-                        subprocess.run(['xdotool', 'windowactivate', window.strip()], 
-                                     env={**os.environ, 'DISPLAY': DISPLAY})
-                    else:
-                        # Sembunyikan window non-aktif (pindahkan ke bawah layar)
-                        subprocess.run(['xdotool', 'windowmove', window.strip(), '0', '500'], 
-                                     env={**os.environ, 'DISPLAY': DISPLAY})
+            for i, window in enumerate(valid_windows):
+                workspace_id = i + 1
+                if workspace_id == active:
+                    # Tampilkan window aktif di posisi 0,0
+                    subprocess.run(['xdotool', 'windowmove', window, '0', '0'], 
+                                 env={**os.environ, 'DISPLAY': DISPLAY})
+                    subprocess.run(['xdotool', 'windowraise', window], 
+                                 env={**os.environ, 'DISPLAY': DISPLAY})
+                    subprocess.run(['xdotool', 'windowactivate', window], 
+                                 env={**os.environ, 'DISPLAY': DISPLAY})
+                    subprocess.run(['xdotool', 'windowfocus', window], 
+                                 env={**os.environ, 'DISPLAY': DISPLAY})
+                else:
+                    # Sembunyikan window non-aktif (pindahkan ke bawah layar)
+                    subprocess.run(['xdotool', 'windowmove', window, '0', '500'], 
+                                 env={**os.environ, 'DISPLAY': DISPLAY})
     except Exception as e:
         print(f"Error showing active workspace: {e}", flush=True)
 
@@ -236,36 +254,56 @@ def switch_workspace(workspace_id):
 
 def make_screenshot():
     ensure_files()
-    raw = SCREENSHOT + '.raw.png'
+    
+    # Dapatkan window ID untuk workspace yang aktif
+    active = get_active_workspace()
+    window_id = get_window_id(active)
+    
+    if not window_id:
+        raise RuntimeError('Window MicroEmulator tidak ditemukan')
+    
+    # Fokuskan window terlebih dahulu
+    subprocess.run(['xdotool', 'windowactivate', window_id], 
+                 env={**os.environ, 'DISPLAY': DISPLAY}, capture_output=True)
+    subprocess.run(['xdotool', 'windowfocus', window_id], 
+                 env={**os.environ, 'DISPLAY': DISPLAY}, capture_output=True)
+    time.sleep(0.5)  # Tunggu sebentar agar window fokus
+    
+    # Gunakan xwd untuk screenshot yang lebih reliable
+    xwd_file = os.path.join(DATA_DIR, 'screenshot.xwd')
+    
+    # Coba dengan xwd terlebih dahulu
     try:
-        # Ambil screenshot langsung dari window yang aktif tanpa crop
-        active = get_active_workspace()
-        result = subprocess.run(['xdotool', 'search', '--name', 'MicroEmulator'], 
-                              capture_output=True, text=True, env={**os.environ, 'DISPLAY': DISPLAY})
+        result = subprocess.run(['xwd', '-display', DISPLAY, '-id', window_id, '-out', xwd_file], 
+                              capture_output=True, timeout=10)
+        
         if result.returncode == 0:
-            windows = result.stdout.strip().split('\n')
-            if len(windows) >= active:
-                window = windows[active - 1]
-                # Screenshot langsung dari window tanpa crop
-                command = ['import', '-display', DISPLAY, '-window', window, '-type', 'TrueColor', '-depth', '8', 'PNG24:' + raw]
-            else:
-                raise IndexError("Window tidak ditemukan")
-        else:
-            raise subprocess.CalledProcessError(result.returncode, 'xdotool')
-    except (subprocess.CalledProcessError, IndexError):
-        # Fallback ke root window jika window tidak ditemukan
-        command = ['import', '-display', DISPLAY, '-window', 'root', '-type', 'TrueColor', '-depth', '8', 'PNG24:' + raw]
+            # Konversi xwd ke png menggunakan ImageMagick
+            convert_result = subprocess.run(['convert', xwd_file, '-type', 'TrueColor', '-depth', '8', 'PNG24:' + SCREENSHOT], 
+                                          capture_output=True)
+            if convert_result.returncode == 0:
+                # Bersihkan file temporary
+                if os.path.exists(xwd_file):
+                    os.remove(xwd_file)
+                return
+    except subprocess.TimeoutExpired:
+        pass
     
-    result = subprocess.run(command, capture_output=True)
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.decode(errors='replace') or 'Gagal mengambil screenshot')
+    # Fallback ke import jika xwd gagal
+    try:
+        # Gunakan import dengan window ID
+        result = subprocess.run(['import', '-display', DISPLAY, '-window', window_id, 
+                               '-type', 'TrueColor', '-depth', '8', 'PNG24:' + SCREENSHOT], 
+                              capture_output=True, timeout=10)
+        if result.returncode == 0:
+            return
+    except subprocess.TimeoutExpired:
+        pass
     
-    # Optimasi gambar tanpa crop atau resize
-    enhanced = subprocess.run([
-        'convert', raw, '-type', 'TrueColor', '-depth', '8', '-quality', '100', 'PNG24:' + SCREENSHOT
-    ], capture_output=True)
-    if enhanced.returncode != 0:
-        raise RuntimeError(enhanced.stderr.decode(errors='replace') or 'Gagal meningkatkan screenshot')
+    # Fallback terakhir: screenshot root window
+    subprocess.run(['import', '-display', DISPLAY, '-window', 'root', 
+                   '-type', 'TrueColor', '-depth', '8', 'PNG24:' + SCREENSHOT], 
+                  capture_output=True)
 
 
 def set_workspace(slot, enabled):
