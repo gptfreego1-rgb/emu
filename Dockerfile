@@ -25,7 +25,6 @@ import hmac
 import http.server
 import os
 import subprocess
-import threading
 import time
 from urllib.parse import parse_qs, quote, urlparse
 
@@ -44,7 +43,9 @@ SCREENSHOT = os.path.join(DATA_DIR, 'microemulator.png')
 SIZE_FILE = os.path.join(DATA_DIR, 'screen.size')
 CONFIG_DIR = os.path.join(DATA_DIR, '.microemulator')
 CONFIG_FILE = os.path.join(CONFIG_DIR, 'config2.xml')
+WORKSPACE_FILE = os.path.join(DATA_DIR, 'workspace.active')
 process = None
+workspace_processes = []
 
 
 def hash_password(value):
@@ -55,11 +56,14 @@ def ensure_files():
     os.makedirs(DATA_DIR, exist_ok=True)
     if not os.path.exists(SIZE_FILE):
         with open(SIZE_FILE, 'w') as f:
-            f.write('393 326\n')
+            f.write('390 310\n')
+    if not os.path.exists(WORKSPACE_FILE):
+        with open(WORKSPACE_FILE, 'w') as f:
+            f.write('1,1\n')
     if not os.path.exists(CONFIG_FILE):
         os.makedirs(CONFIG_DIR, exist_ok=True)
         with open(CONFIG_FILE, 'w') as f:
-            f.write('<config><devices><device default="true"><name>Avatar resizable</name><descriptor>org/microemu/device/resizable/device.xml</descriptor><rectangle><x>0</x><y>0</y><width>393</width><height>326</height></rectangle></device></devices></config>\n')
+            f.write('<config><devices><device default="true"><name>Avatar resizable</name><descriptor>org/microemu/device/resizable/device.xml</descriptor><rectangle><x>0</x><y>0</y><width>390</width><height>310</height></rectangle></device></devices></config>\n')
     if not os.path.exists(PASSWORD_FILE):
         with open(PASSWORD_FILE, 'w') as f:
             f.write(hash_password(DEFAULT_PASSWORD))
@@ -78,47 +82,82 @@ def check_password(value):
 
 
 def emulator_running():
-    return process is not None and process.poll() is None
+    return any(p is not None and p.poll() is None for p in workspace_processes)
+
+
+def workspace_states():
+    try:
+        with open(WORKSPACE_FILE) as f:
+            values = f.read().strip().split(',')
+        return [values[0] == '1', len(values) > 1 and values[1] == '1']
+    except OSError:
+        return [True, True]
 
 
 def start_emulator():
-    global process
+    global process, workspace_processes
     if emulator_running():
-        return 'Emulator sudah berjalan'
+        return 'Workspace aktif sudah berjalan'
     ensure_files()
     with open(SIZE_FILE) as f:
         width, height = [int(x) for x in f.read().split()[:2]]
     # Opsi -noverify diletakkan sebelum -jar karena itu sintaks Java launcher yang valid.
     command = [
         'java', '-noverify', '-Djava.awt.headless=false',
+        '-Dawt.useSystemAAFontSettings=on', '-Dswing.aatext=true',
         '-Duser.home=' + DATA_DIR,
         '-cp', MICROEMU + ':' + DEVICE,
         'org.microemu.app.Main', JAD
     ]
-    log = open(os.path.join(DATA_DIR, 'emulator.log'), 'ab', buffering=0)
-    process = subprocess.Popen(
-        command,
-        cwd='/opt/avatar',
-        env={**os.environ, 'DISPLAY': DISPLAY},
-        stdout=log,
-        stderr=subprocess.STDOUT
-    )
+    workspace_processes = []
+    states = workspace_states()
+    for slot in (1, 2):
+        if not states[slot - 1]:
+            workspace_processes.append(None)
+            continue
+        log = open(os.path.join(DATA_DIR, 'workspace%d.log' % slot), 'ab', buffering=0)
+        p = subprocess.Popen(command, cwd='/opt/avatar', env={**os.environ, 'DISPLAY': DISPLAY}, stdout=log, stderr=subprocess.STDOUT)
+        workspace_processes.append(p)
+    process = workspace_processes[0]
     subprocess.Popen([
         'sh', '-c',
-        "sleep 3; window=$(xdotool search --name 'KEmulator' 2>/dev/null | head -1); "
+        "sleep 3; window=$(xdotool search --name 'MicroEmulator' 2>/dev/null | head -1); "
         "if [ -n \"$window\" ]; then xdotool windowsize \"$window\" %d %d; fi" % (width, height)
     ], env={**os.environ, 'DISPLAY': DISPLAY})
-    return 'Emulator berhasil dimulai'
+    return 'Dua workspace berhasil dimulai'
 
 
 def make_screenshot():
     ensure_files()
-    result = subprocess.run(
-        ['import', '-display', DISPLAY, '-window', 'root', '-crop', '393x326+0+0', SCREENSHOT],
-        capture_output=True
-    )
+    raw = SCREENSHOT + '.raw.png'
+    try:
+        window = subprocess.check_output(['xdotool', 'search', '--name', 'MicroEmulator'], env={**os.environ, 'DISPLAY': DISPLAY}, text=True).splitlines()[0]
+        command = ['import', '-display', DISPLAY, '-window', window, '-crop', '393x326+0+50', '-type', 'TrueColor', '-depth', '8', 'PNG24:' + raw]
+    except (subprocess.CalledProcessError, IndexError):
+        command = ['import', '-display', DISPLAY, '-window', 'root', '-crop', '393x326+0+0', '-type', 'TrueColor', '-depth', '8', 'PNG24:' + raw]
+    result = subprocess.run(command, capture_output=True)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.decode(errors='replace') or 'Gagal mengambil screenshot')
+    enhanced = subprocess.run([
+        'convert', raw, '-trim', '+repage', '-filter', 'Lanczos',
+        '-resize', '393x326^', '-gravity', 'center', '-extent', '393x326',
+        '-type', 'TrueColor', '-depth', '8', '-quality', '100', 'PNG24:' + SCREENSHOT
+    ], capture_output=True)
+    if enhanced.returncode != 0:
+        raise RuntimeError(enhanced.stderr.decode(errors='replace') or 'Gagal meningkatkan screenshot')
+
+
+def set_workspace(slot, enabled):
+    states = workspace_states()
+    states[0 if str(slot) == '1' else 1] = enabled
+    with open(WORKSPACE_FILE, 'w') as f:
+        f.write('%d,%d\n' % (int(states[0]), int(states[1])))
+    for p in workspace_processes:
+        if p is not None and p.poll() is None:
+            p.terminate()
+    time.sleep(1)
+    start_emulator()
+    return states
 
 
 def resize_emulator(width, height):
@@ -141,6 +180,7 @@ def resize_emulator(width, height):
 
 def page(message=''):
     running = emulator_running()
+    states = workspace_states()
     notice = '<div class="notice">%s</div>' % message if message else ''
     state_class = '' if running else ' stopped'
     state_text = 'running' if running else 'stopped'
@@ -151,14 +191,14 @@ def page(message=''):
 :root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#0b1020;color:#eef2ff;font:15px system-ui,-apple-system,Segoe UI,sans-serif}main{max-width:980px;margin:auto;padding:32px 20px}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}.brand{font-size:25px;font-weight:800}.muted,.small{color:#97a3bf}.small{font-size:13px}.grid{display:grid;grid-template-columns:1.1fr .9fr;gap:18px}.card{background:#121a2e;border:1px solid #263453;border-radius:18px;padding:22px;box-shadow:0 14px 40px #0003}h2{margin:0 0 8px}.status{padding:6px 11px;border-radius:99px;background:#163d32;color:#70e1b4}.status.stopped{background:#442333;color:#ff9db2}button{border:0;border-radius:10px;padding:11px 15px;background:#6d5dfc;color:white;font-weight:700;cursor:pointer;margin:5px 5px 5px 0}button.alt{background:#263453}input{width:100%%;padding:12px;border:1px solid #334367;border-radius:10px;background:#0c1426;color:white;margin:7px 0 12px}.notice{background:#1d2b4a;padding:12px;border-radius:10px;margin-bottom:18px}.shot{width:100%%;min-height:260px;object-fit:contain;background:#080b13;border-radius:12px;margin-top:14px;border:1px solid #263453}@media(max-width:720px){.grid{grid-template-columns:1fr}}
 </style></head><body><main>
 <div class="top"><div><div class="brand">Avatar FreeJ2ME</div><div class="muted">J2ME game control panel</div></div><div class="status%s">● %s</div></div>%s
-<div class="grid"><section class="card"><h2>Emulator</h2><p class="muted">FreeJ2ME AWT · avatar.jar · Display virtual: %s</p>
-<form method="post" action="/resize"><label>Lebar (px)</label><input type="number" name="width" value="393" min="120" max="1200" required><label>Tinggi (px)</label><input type="number" name="height" value="326" min="120" max="1200" required><button class="alt">Terapkan ukuran dari web</button></form>
+<div class="grid"><section class="card"><h2>Emulator</h2><p class="muted">MicroEmulator · avatar.jar · Display virtual: %s</p>
+<form method="post" action="/workspace"><button name="slot" value="1" class="alt">Workspace 1: %s</button><button name="slot" value="2" class="alt">Workspace 2: %s</button></form>
 <form method="post" action="/start"><button>Start emulator</button></form>
 <form method="post" action="/screenshot"><button class="alt">Ambil screenshot</button><a href="/screenshot.png" target="_blank"><button type="button" class="alt">Buka gambar</button></a></form>
 <p class="small">Screenshot diambil dari framebuffer Xvfb MicroEmulator.</p><img class="shot" src="/screenshot.png?%s" alt="Screenshot emulator" onerror="this.style.display='none'"></section>
 <section class="card"><h2>Change password</h2><p class="muted">Hanya password login panel yang berubah. Emulator tetap berjalan.</p>
 <form method="post" action="/change-password"><label>Password saat ini</label><input type="password" name="current" required><label>Password baru</label><input type="password" name="new" minlength="6" required><label>Ulangi password baru</label><input type="password" name="confirm" minlength="6" required><button>Simpan password</button></form>
-<p class="small">Password default awal: <b>123456</b>. Data login disimpan di volume /data.</p></section></div></main></body></html>''' % (state_class, state_text, notice, DISPLAY, int(time.time()))
+<p class="small">Password default awal: <b>123456</b>. Data login disimpan di volume /data.</p></section></div></main></body></html>''' % (state_class, state_text, notice, DISPLAY, 'aktif' if states[0] else 'nonaktif', 'aktif' if states[1] else 'nonaktif', int(time.time()))
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -224,14 +264,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try:
             if path == '/start':
                 message = start_emulator()
+            elif path == '/workspace':
+                slot = fields.get('slot', ['1'])[0]
+                states = workspace_states()
+                index = 0 if slot == '1' else 1
+                states[index] = not states[index]
+                with open(WORKSPACE_FILE, 'w') as f:
+                    f.write('%d,%d\n' % (int(states[0]), int(states[1])))
+                for p in workspace_processes:
+                    if p is not None and p.poll() is None:
+                        p.terminate()
+                time.sleep(1)
+                start_emulator()
+                message = 'Workspace %s %s' % (slot, 'diaktifkan' if states[index] else 'dinonaktifkan')
             elif path == '/screenshot':
                 make_screenshot()
                 message = 'Screenshot berhasil diperbarui'
-            elif path == '/resize':
-                width = fields.get('width', ['393'])[0]
-                height = fields.get('height', ['326'])[0]
-                width, height = resize_emulator(width, height)
-                message = 'Ukuran MicroEmulator diubah menjadi %dx%d dari panel web' % (width, height)
             elif path == '/change-password':
                 current = fields.get('current', [''])[0]
                 new = fields.get('new', [''])[0]
@@ -282,4 +330,4 @@ SH
 WORKDIR /opt/avatar
 EXPOSE 5901 8080
 
-CMD ["sh", "-c", "mkdir -p /data; if [ ! -s /data/vnc.pass ]; then x11vnc -storepasswd \"${VNC_PASSWORD:-123456}\" /data/vnc.pass >/dev/null 2>&1 || true; fi; Xvfb :99 -screen 0 393x326x24 -ac +extension GLX >/data/xvfb.log 2>&1 & sleep 2; if xdpyinfo -display :99 >/dev/null 2>&1; then (while true; do x11vnc -display :99 -rfbport 5901 -rfbauth /data/vnc.pass -forever -shared -xkb -noxrecord -noxfixes -noxdamage >>/data/x11vnc.log 2>&1 || true; sleep 2; done) & else echo 'Xvfb failed; HTTP panel will still start' >>/data/xvfb.log; fi; exec python3 /opt/avatar/app.py"]
+CMD ["sh", "-c", "mkdir -p /data; if [ ! -s /data/vnc.pass ]; then x11vnc -storepasswd \"${VNC_PASSWORD:-123456}\" /data/vnc.pass >/dev/null 2>&1 || true; fi; Xvfb :99 -screen 0 393x450x24 -ac +extension GLX >/data/xvfb.log 2>&1 & sleep 2; if xdpyinfo -display :99 >/dev/null 2>&1; then (while true; do x11vnc -display :99 -rfbport 5901 -rfbauth /data/vnc.pass -forever -shared -xkb -noxrecord -noxfixes -noxdamage >>/data/x11vnc.log 2>&1 || true; sleep 2; done) & else echo 'Xvfb failed; HTTP panel will still start' >>/data/xvfb.log; fi; exec python3 /opt/avatar/app.py"]
