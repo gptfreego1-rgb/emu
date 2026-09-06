@@ -24,6 +24,7 @@ import hashlib
 import hmac
 import http.server
 import os
+import shutil
 import subprocess
 import time
 from urllib.parse import parse_qs, quote, urlparse
@@ -167,6 +168,50 @@ def start_emulator():
     return 'Dua workspace berhasil dimulai'
 
 
+def move_workspace(from_slot, to_slot):
+    """Memindahkan data dari satu workspace ke workspace lain"""
+    from_dir = get_workspace_dir(from_slot)
+    to_dir = get_workspace_dir(to_slot)
+    
+    if not os.path.exists(from_dir):
+        return 'Workspace sumber tidak memiliki data'
+    
+    # Hentikan emulator jika berjalan
+    if emulator_running():
+        for p in workspace_processes:
+            if p is not None and p.poll() is None:
+                p.terminate()
+        time.sleep(1)
+    
+    try:
+        # Backup workspace tujuan jika ada
+        if os.path.exists(to_dir):
+            backup_dir = to_dir + '.backup'
+            if os.path.exists(backup_dir):
+                shutil.rmtree(backup_dir)
+            shutil.copytree(to_dir, backup_dir)
+        
+        # Hapus workspace tujuan
+        if os.path.exists(to_dir):
+            shutil.rmtree(to_dir)
+        
+        # Pindahkan data
+        shutil.copytree(from_dir, to_dir)
+        shutil.rmtree(from_dir)
+        
+        # Mulai ulang emulator
+        start_emulator()
+        
+        return 'Data berhasil dipindahkan dari workspace %d ke workspace %d' % (from_slot, to_slot)
+    except Exception as e:
+        # Restore backup jika ada
+        if os.path.exists(to_dir + '.backup'):
+            if os.path.exists(to_dir):
+                shutil.rmtree(to_dir)
+            shutil.move(to_dir + '.backup', to_dir)
+        return 'Gagal memindahkan: %s' % str(e)
+
+
 def make_screenshot():
     ensure_files()
     raw = SCREENSHOT + '.raw.png'
@@ -234,7 +279,7 @@ def page(message=''):
 <html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Avatar FreeJ2ME</title>
 <style>
-:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#0b1020;color:#eef2ff;font:15px system-ui,-apple-system,Segoe UI,sans-serif}main{max-width:980px;margin:auto;padding:32px 20px}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}.brand{font-size:25px;font-weight:800}.muted,.small{color:#97a3bf}.small{font-size:13px}.grid{display:grid;grid-template-columns:1.1fr .9fr;gap:18px}.card{background:#121a2e;border:1px solid #263453;border-radius:18px;padding:22px;box-shadow:0 14px 40px #0003}h2{margin:0 0 8px}.status{padding:6px 11px;border-radius:99px;background:#163d32;color:#70e1b4}.status.stopped{background:#442333;color:#ff9db2}button{border:0;border-radius:10px;padding:11px 15px;background:#6d5dfc;color:white;font-weight:700;cursor:pointer;margin:5px 5px 5px 0}button.alt{background:#263453}input{width:100%%;padding:12px;border:1px solid #334367;border-radius:10px;background:#0c1426;color:white;margin:7px 0 12px}.notice{background:#1d2b4a;padding:12px;border-radius:10px;margin-bottom:18px}.shot{width:100%%;min-height:260px;object-fit:contain;background:#080b13;border-radius:12px;margin-top:14px;border:1px solid #263453}@media(max-width:720px){.grid{grid-template-columns:1fr}}
+:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#0b1020;color:#eef2ff;font:15px system-ui,-apple-system,Segoe UI,sans-serif}main{max-width:980px;margin:auto;padding:32px 20px}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}.brand{font-size:25px;font-weight:800}.muted,.small{color:#97a3bf}.small{font-size:13px}.grid{display:grid;grid-template-columns:1.1fr .9fr;gap:18px}.card{background:#121a2e;border:1px solid #263453;border-radius:18px;padding:22px;box-shadow:0 14px 40px #0003}h2{margin:0 0 8px}.status{padding:6px 11px;border-radius:99px;background:#163d32;color:#70e1b4}.status.stopped{background:#442333;color:#ff9db2}button{border:0;border-radius:10px;padding:11px 15px;background:#6d5dfc;color:white;font-weight:700;cursor:pointer;margin:5px 5px 5px 0}button.alt{background:#263453}button.move{background:#f59e0b}button.move:hover{background:#d97706}input{width:100%%;padding:12px;border:1px solid #334367;border-radius:10px;background:#0c1426;color:white;margin:7px 0 12px}.notice{background:#1d2b4a;padding:12px;border-radius:10px;margin-bottom:18px}.shot{width:100%%;min-height:260px;object-fit:contain;background:#080b13;border-radius:12px;margin-top:14px;border:1px solid #263453}.workspace-info{background:#1a2338;padding:12px;border-radius:8px;margin:10px 0}.move-buttons{display:flex;gap:10px;margin-top:10px}@media(max-width:720px){.grid{grid-template-columns:1fr}.move-buttons{flex-direction:column}}
 </style></head><body><main>
 <div class="top"><div><div class="brand">Avatar FreeJ2ME</div><div class="muted">J2ME game control panel</div></div><div class="status%s">● %s</div></div>%s
 <div class="grid"><section class="card"><h2>Emulator</h2><p class="muted">MicroEmulator · avatar.jar · Display virtual: %s</p>
@@ -242,9 +287,19 @@ def page(message=''):
 <form method="post" action="/start"><button>Start emulator</button></form>
 <form method="post" action="/screenshot"><button class="alt">Ambil screenshot</button><a href="/screenshot.png" target="_blank"><button type="button" class="alt">Buka gambar</button></a></form>
 <p class="small">Screenshot diambil dari framebuffer Xvfb MicroEmulator.</p><img class="shot" src="/screenshot.png?%s" alt="Screenshot emulator" onerror="this.style.display='none'"></section>
+<section class="card"><h2>Pindahkan Data</h2><p class="muted">Pindahkan data (save game, cache) antar workspace</p>
+<div class="workspace-info">
+<strong>Workspace 1:</strong> %s<br>
+<strong>Workspace 2:</strong> %s
+</div>
+<div class="move-buttons">
+<form method="post" action="/move-workspace"><input type="hidden" name="from" value="1"><input type="hidden" name="to" value="2"><button type="submit" class="move">Pindah dari Workspace 1 ke 2</button></form>
+<form method="post" action="/move-workspace"><input type="hidden" name="from" value="2"><input type="hidden" name="to" value="1"><button type="submit" class="move">Pindah dari Workspace 2 ke 1</button></form>
+</div>
+<p class="small">Data akan dipindahkan dan emulator akan restart otomatis.</p></section>
 <section class="card"><h2>Change password</h2><p class="muted">Hanya password login panel yang berubah. Emulator tetap berjalan.</p>
 <form method="post" action="/change-password"><label>Password saat ini</label><input type="password" name="current" required><label>Password baru</label><input type="password" name="new" minlength="6" required><label>Ulangi password baru</label><input type="password" name="confirm" minlength="6" required><button>Simpan password</button></form>
-<p class="small">Password default awal: <b>123456</b>. Data login disimpan di volume /data.</p></section></div></main></body></html>''' % (state_class, state_text, notice, DISPLAY, 'aktif' if states[0] else 'nonaktif', 'aktif' if states[1] else 'nonaktif', int(time.time()))
+<p class="small">Password default awal: <b>123456</b>. Data login disimpan di volume /data.</p></section></div></main></body></html>''' % (state_class, state_text, notice, DISPLAY, 'aktif' if states[0] else 'nonaktif', 'aktif' if states[1] else 'nonaktif', int(time.time()), 'aktif' if states[0] else 'nonaktif', 'aktif' if states[1] else 'nonaktif')
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -323,6 +378,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 time.sleep(1)
                 start_emulator()
                 message = 'Workspace %s %s' % (slot, 'diaktifkan' if states[index] else 'dinonaktifkan')
+            elif path == '/move-workspace':
+                from_slot = int(fields.get('from', ['1'])[0])
+                to_slot = int(fields.get('to', ['2'])[0])
+                message = move_workspace(from_slot, to_slot)
             elif path == '/screenshot':
                 make_screenshot()
                 message = 'Screenshot berhasil diperbarui'
