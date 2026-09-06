@@ -1,21 +1,20 @@
-FROM eclipse-temurin:17-jre-alpine
+FROM eclipse-temurin:17-jre-jammy
 
-ENV \
+ENV DEBIAN_FRONTEND=noninteractive \
     DISPLAY=:99 \
     PORT=8080 \
-    DATA_DIR=/data \
-    MALLOC_ARENA_MAX=2
+    DATA_DIR=/data
 
-RUN apk add --no-cache \
-        python3 curl unzip imagemagick xvfb x11vnc xdpyinfo xdotool \
-        fontconfig ttf-dejavu \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 curl unzip imagemagick xvfb x11vnc x11-utils xdotool \
+    && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /opt/avatar /data \
     && curl -L --fail --retry 3 -o /opt/avatar/avatar.jar https://files.catbox.moe/sllphh.ja \
     && curl -L --fail --retry 3 -o /tmp/microemulator.zip 'https://sourceforge.net/projects/microemulator/files/microemulator/2.0.4/microemulator-2.0.4.zip/download' \
     && unzip -q /tmp/microemulator.zip -d /tmp \
     && cp /tmp/microemulator-2.0.4/microemulator.jar /opt/avatar/microemulator.jar \
     && cp /tmp/microemulator-2.0.4/devices/microemu-device-resizable.jar /opt/avatar/microemu-device-resizable.jar \
-    && rm -rf /tmp/microemulator.zip /tmp/microemulator-2.0.4 /var/cache/apk/*
+    && rm -rf /tmp/microemulator.zip /tmp/microemulator-2.0.4
 
 RUN <<'SH'
 cat > /opt/avatar/app.py <<'PY'
@@ -38,6 +37,7 @@ DEFAULT_PASSWORD = os.getenv('DEFAULT_PASSWORD', '123456')
 JAR = '/opt/avatar/avatar.jar'
 MICROEMU = '/opt/avatar/microemulator.jar'
 DEVICE = '/opt/avatar/microemu-device-resizable.jar'
+JAD = os.path.join(DATA_DIR, 'avatar.jad')
 PASSWORD_FILE = os.path.join(DATA_DIR, 'password.sha256')
 SCREENSHOT = os.path.join(DATA_DIR, 'microemulator.png')
 SIZE_FILE = os.path.join(DATA_DIR, 'screen.size')
@@ -50,39 +50,41 @@ def hash_password(value):
     return hashlib.sha256(value.encode('utf-8')).hexdigest()
 
 
-def workspace_dir(slot):
-    return os.path.join(DATA_DIR, 'workspace%d' % slot)
+def get_workspace_config_dir(workspace_id):
+    """Mendapatkan direktori konfigurasi untuk workspace tertentu"""
+    return os.path.join(DATA_DIR, '.microemulator-workspace%d' % workspace_id)
 
 
-def workspace_jad(slot):
-    return os.path.join(workspace_dir(slot), 'avatar.jad')
-
-
-def workspace_config(slot):
-    return os.path.join(workspace_dir(slot), '.microemulator', 'config2.xml')
+def get_workspace_config_file(workspace_id):
+    """Mendapatkan file konfigurasi untuk workspace tertentu"""
+    return os.path.join(get_workspace_config_dir(workspace_id), 'config2.xml')
 
 
 def ensure_files():
     os.makedirs(DATA_DIR, exist_ok=True)
-    for slot in (1, 2):
-        home = workspace_dir(slot)
-        config = workspace_config(slot)
-        os.makedirs(os.path.dirname(config), exist_ok=True)
-        if not os.path.exists(config):
-            with open(config, 'w') as f:
-                f.write('<config><devices><device default="true"><name>Avatar resizable</name><descriptor>org/microemu/device/resizable/device.xml</descriptor><rectangle><x>0</x><y>0</y><width>390</width><height>310</height></rectangle></device></devices></config>\n')
-        if not os.path.exists(workspace_jad(slot)):
-            with open(workspace_jad(slot), 'w') as f:
-                f.write('MIDlet-Jar-URL: file:///opt/avatar/avatar.jar\nMIDlet-Jar-Size: %d\n' % os.path.getsize(JAR))
     if not os.path.exists(SIZE_FILE):
         with open(SIZE_FILE, 'w') as f:
             f.write('390 310\n')
     if not os.path.exists(WORKSPACE_FILE):
         with open(WORKSPACE_FILE, 'w') as f:
             f.write('1,1\n')
+    
+    # Buat konfigurasi terpisah untuk setiap workspace
+    for workspace_id in range(1, 3):
+        config_dir = get_workspace_config_dir(workspace_id)
+        config_file = get_workspace_config_file(workspace_id)
+        
+        if not os.path.exists(config_file):
+            os.makedirs(config_dir, exist_ok=True)
+            with open(config_file, 'w') as f:
+                f.write('<config><devices><device default="true"><name>Avatar resizable</name><descriptor>org/microemu/device/resizable/device.xml</descriptor><rectangle><x>0</x><y>0</y><width>390</width><height>310</height></rectangle></device></devices></config>\n')
+    
     if not os.path.exists(PASSWORD_FILE):
         with open(PASSWORD_FILE, 'w') as f:
             f.write(hash_password(DEFAULT_PASSWORD))
+    if not os.path.exists(JAD):
+        with open(JAD, 'w') as f:
+            f.write('MIDlet-Jar-URL: file:///opt/avatar/avatar.jar\nMIDlet-Jar-Size: %d\n' % os.path.getsize(JAR))
 
 
 def check_password(value):
@@ -114,61 +116,58 @@ def start_emulator():
     ensure_files()
     with open(SIZE_FILE) as f:
         width, height = [int(x) for x in f.read().split()[:2]]
-    # Opsi -noverify diletakkan sebelum -jar karena itu sintaks Java launcher yang valid.
+    
     workspace_processes = []
     states = workspace_states()
+    
     for slot in (1, 2):
         if not states[slot - 1]:
             workspace_processes.append(None)
             continue
+        
+        # Gunakan direktori konfigurasi terpisah untuk setiap workspace
+        workspace_config_dir = get_workspace_config_dir(slot)
+        
+        # Opsi -noverify diletakkan sebelum -jar karena itu sintaks Java launcher yang valid.
         command = [
-            'java', '-noverify',
-            '-XX:+UseSerialGC', '-XX:TieredStopAtLevel=1',
-            '-Djava.awt.headless=false',
+            'java', '-noverify', '-Djava.awt.headless=false',
             '-Dawt.useSystemAAFontSettings=on', '-Dswing.aatext=true',
-            '-Duser.home=' + workspace_dir(slot),
+            '-Duser.home=' + workspace_config_dir,
             '-cp', MICROEMU + ':' + DEVICE,
-            'org.microemu.app.Main', workspace_jad(slot)
+            'org.microemu.app.Main', JAD
         ]
+        
         log = open(os.path.join(DATA_DIR, 'workspace%d.log' % slot), 'ab', buffering=0)
         p = subprocess.Popen(command, cwd='/opt/avatar', env={**os.environ, 'DISPLAY': DISPLAY}, stdout=log, stderr=subprocess.STDOUT)
         workspace_processes.append(p)
-    process = next((p for p in workspace_processes if p is not None), None)
+    
+    process = workspace_processes[0]
     subprocess.Popen([
         'sh', '-c',
-        "exec >>/data/autostart.log 2>&1; echo '[autostart] waiting for MicroEmulator windows'; "
-        "windows=''; for i in $(seq 1 30); do windows=$(xdotool search --name 'MicroEmulator' 2>/dev/null || true); "
-        "[ -n \"$windows\" ] && break; sleep 1; done; "
-        "echo \"[autostart] windows: $windows\"; for window in $windows; do "
-        "xdotool windowsize \"$window\" %d %d; xdotool mousemove --window \"$window\" 195 235 click 1; "
-        "xdotool key --window \"$window\" Return; echo \"[autostart] started $window\"; done" % (width, height)
+        "sleep 3; window=$(xdotool search --name 'MicroEmulator' 2>/dev/null | head -1); "
+        "if [ -n \"$window\" ]; then xdotool windowsize \"$window\" %d %d; fi" % (width, height)
     ], env={**os.environ, 'DISPLAY': DISPLAY})
     return 'Dua workspace berhasil dimulai'
 
 
-def make_screenshot(selection='both'):
+def make_screenshot():
     ensure_files()
-    windows = subprocess.check_output(['xdotool', 'search', '--name', 'MicroEmulator'], env={**os.environ, 'DISPLAY': DISPLAY}, text=True).splitlines()
-    if len(windows) < 1:
-        raise RuntimeError('Window MicroEmulator belum tersedia')
-    targets = windows if selection == 'both' else [windows[0 if selection == '1' else min(1, len(windows) - 1)]]
-    shots = []
-    for index, window in enumerate(targets, 1):
-        raw = SCREENSHOT + '.%d.raw.png' % index
-        result = subprocess.run(['import', '-display', DISPLAY, '-window', window, '-crop', '393x326+0+50', '-type', 'TrueColor', '-depth', '8', 'PNG24:' + raw], capture_output=True)
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr.decode(errors='replace') or 'Gagal mengambil screenshot')
-        shot = SCREENSHOT + '.%d.png' % index
-        enhanced = subprocess.run(['convert', raw, '-trim', '+repage', '-filter', 'Lanczos', '-resize', '393x326^', '-gravity', 'center', '-extent', '393x326', '-type', 'TrueColor', '-depth', '8', '-quality', '100', 'PNG24:' + shot], capture_output=True)
-        if enhanced.returncode != 0:
-            raise RuntimeError(enhanced.stderr.decode(errors='replace') or 'Gagal meningkatkan screenshot')
-        shots.append(shot)
-    if len(shots) == 1:
-        os.replace(shots[0], SCREENSHOT)
-    else:
-        result = subprocess.run(['convert', shots[0], shots[1], '-append', '-quality', '100', 'PNG24:' + SCREENSHOT], capture_output=True)
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr.decode(errors='replace') or 'Gagal menggabungkan screenshot')
+    raw = SCREENSHOT + '.raw.png'
+    try:
+        window = subprocess.check_output(['xdotool', 'search', '--name', 'MicroEmulator'], env={**os.environ, 'DISPLAY': DISPLAY}, text=True).splitlines()[0]
+        command = ['import', '-display', DISPLAY, '-window', window, '-crop', '393x326+0+50', '-type', 'TrueColor', '-depth', '8', 'PNG24:' + raw]
+    except (subprocess.CalledProcessError, IndexError):
+        command = ['import', '-display', DISPLAY, '-window', 'root', '-crop', '393x326+0+0', '-type', 'TrueColor', '-depth', '8', 'PNG24:' + raw]
+    result = subprocess.run(command, capture_output=True)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.decode(errors='replace') or 'Gagal mengambil screenshot')
+    enhanced = subprocess.run([
+        'convert', raw, '-trim', '+repage', '-filter', 'Lanczos',
+        '-resize', '393x326^', '-gravity', 'center', '-extent', '393x326',
+        '-type', 'TrueColor', '-depth', '8', '-quality', '100', 'PNG24:' + SCREENSHOT
+    ], capture_output=True)
+    if enhanced.returncode != 0:
+        raise RuntimeError(enhanced.stderr.decode(errors='replace') or 'Gagal meningkatkan screenshot')
 
 
 def set_workspace(slot, enabled):
@@ -189,11 +188,15 @@ def resize_emulator(width, height):
     height = max(120, min(1200, int(height)))
     with open(SIZE_FILE, 'w') as f:
         f.write('%d %d\n' % (width, height))
-    for slot in (1, 2):
-        config = workspace_config(slot)
-        os.makedirs(os.path.dirname(config), exist_ok=True)
-        with open(config, 'w') as f:
+    
+    # Update konfigurasi untuk semua workspace
+    for workspace_id in range(1, 3):
+        config_dir = get_workspace_config_dir(workspace_id)
+        os.makedirs(config_dir, exist_ok=True)
+        config_file = get_workspace_config_file(workspace_id)
+        with open(config_file, 'w') as f:
             f.write('<config><devices><device default="true"><name>Avatar resizable</name><descriptor>org/microemu/device/resizable/device.xml</descriptor><rectangle><x>0</x><y>0</y><width>%d</width><height>%d</height></rectangle></device></devices></config>\n' % (width, height))
+    
     if emulator_running():
         process.terminate()
         try:
@@ -220,7 +223,7 @@ def page(message=''):
 <div class="grid"><section class="card"><h2>Emulator</h2><p class="muted">MicroEmulator · avatar.jar · Display virtual: %s</p>
 <form method="post" action="/workspace"><button name="slot" value="1" class="alt">Workspace 1: %s</button><button name="slot" value="2" class="alt">Workspace 2: %s</button></form>
 <form method="post" action="/start"><button>Start emulator</button></form>
-<form method="post" action="/screenshot"><select name="selection"><option value="1">Workspace 1</option><option value="2">Workspace 2</option><option value="both" selected>Keduanya</option></select><button class="alt">Ambil screenshot</button><a href="/screenshot.png" target="_blank"><button type="button" class="alt">Buka gambar</button></a></form>
+<form method="post" action="/screenshot"><button class="alt">Ambil screenshot</button><a href="/screenshot.png" target="_blank"><button type="button" class="alt">Buka gambar</button></a></form>
 <p class="small">Screenshot diambil dari framebuffer Xvfb MicroEmulator.</p><img class="shot" src="/screenshot.png?%s" alt="Screenshot emulator" onerror="this.style.display='none'"></section>
 <section class="card"><h2>Change password</h2><p class="muted">Hanya password login panel yang berubah. Emulator tetap berjalan.</p>
 <form method="post" action="/change-password"><label>Password saat ini</label><input type="password" name="current" required><label>Password baru</label><input type="password" name="new" minlength="6" required><label>Ulangi password baru</label><input type="password" name="confirm" minlength="6" required><button>Simpan password</button></form>
@@ -267,8 +270,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_html(page(message))
         elif path == '/screenshot.png':
             try:
-                selection = parse_qs(urlparse(self.path).query).get('selection', ['both'])[0]
-                make_screenshot(selection)
+                make_screenshot()
                 with open(SCREENSHOT, 'rb') as f:
                     data = f.read()
                 self.send_response(200)
@@ -305,9 +307,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 start_emulator()
                 message = 'Workspace %s %s' % (slot, 'diaktifkan' if states[index] else 'dinonaktifkan')
             elif path == '/screenshot':
-                selection = fields.get('selection', ['both'])[0]
-                make_screenshot(selection)
-                message = 'Screenshot %s berhasil diperbarui' % ('keduanya' if selection == 'both' else 'Workspace ' + selection)
+                make_screenshot()
+                message = 'Screenshot berhasil diperbarui'
             elif path == '/change-password':
                 current = fields.get('current', [''])[0]
                 new = fields.get('new', [''])[0]
@@ -358,4 +359,4 @@ SH
 WORKDIR /opt/avatar
 EXPOSE 5901 8080
 
-CMD ["sh", "-c", "set -eu; mkdir -p /data; echo '[startup] container starting' >>/data/startup.log; if [ ! -s /data/vnc.pass ]; then x11vnc -storepasswd \"${VNC_PASSWORD:-123456}\" /data/vnc.pass >/dev/null 2>&1 || true; fi; Xvfb :99 -screen 0 393x450x24 -ac +extension GLX >/data/xvfb.log 2>&1 & echo $! >/data/xvfb.pid; for i in $(seq 1 20); do if xdpyinfo -display :99 >/dev/null 2>&1; then break; fi; sleep 1; done; xdpyinfo -display :99 >>/data/startup.log 2>&1 || true; (while true; do x11vnc -display :99 -rfbport 5901 -rfbauth /data/vnc.pass -forever -shared -xkb -noxrecord -noxfixes -noxdamage >>/data/x11vnc.log 2>&1 || true; sleep 2; done) & echo $! >/data/x11vnc.pid; exec python3 /opt/avatar/app.py"]
+CMD ["sh", "-c", "mkdir -p /data; if [ ! -s /data/vnc.pass ]; then x11vnc -storepasswd \"${VNC_PASSWORD:-123456}\" /data/vnc.pass >/dev/null 2>&1 || true; fi; Xvfb :99 -screen 0 393x450x24 -ac +extension GLX >/data/xvfb.log 2>&1 & sleep 2; if xdpyinfo -display :99 >/dev/null 2>&1; then (while true; do x11vnc -display :99 -rfbport 5901 -rfbauth /data/vnc.pass -forever -shared -xkb -noxrecord -noxfixes -noxdamage >>/data/x11vnc.log 2>&1 || true; sleep 2; done) & else echo 'Xvfb failed; HTTP panel will still start' >>/data/xvfb.log; fi; exec python3 /opt/avatar/app.py"]
