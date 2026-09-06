@@ -147,7 +147,8 @@ def start_emulator():
     subprocess.Popen([
         'sh', '-c',
         "sleep 3; for window in $(xdotool search --name 'MicroEmulator' 2>/dev/null); do "
-        "xdotool windowsize \"$window\" %d %d; xdotool key --window \"$window\" Return; done" % (width, height)
+        "xdotool windowsize \"$window\" %d %d; xdotool mousemove --window \"$window\" 195 235 click 1; "
+        "xdotool key --window \"$window\" Return; done" % (width, height)
     ], env={**os.environ, 'DISPLAY': DISPLAY})
     return 'Dua workspace berhasil dimulai'
 
