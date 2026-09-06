@@ -24,7 +24,6 @@ import hashlib
 import hmac
 import http.server
 import os
-import shutil
 import subprocess
 import time
 from urllib.parse import parse_qs, quote, urlparse
@@ -43,6 +42,7 @@ PASSWORD_FILE = os.path.join(DATA_DIR, 'password.sha256')
 SCREENSHOT = os.path.join(DATA_DIR, 'microemulator.png')
 SIZE_FILE = os.path.join(DATA_DIR, 'screen.size')
 WORKSPACE_FILE = os.path.join(DATA_DIR, 'workspace.active')
+ACTIVE_WORKSPACE_FILE = os.path.join(DATA_DIR, 'active.workspace')
 process = None
 workspace_processes = []
 
@@ -64,6 +64,9 @@ def ensure_files():
     if not os.path.exists(WORKSPACE_FILE):
         with open(WORKSPACE_FILE, 'w') as f:
             f.write('1,1\n')
+    if not os.path.exists(ACTIVE_WORKSPACE_FILE):
+        with open(ACTIVE_WORKSPACE_FILE, 'w') as f:
+            f.write('1\n')
     
     # Baca ukuran dari SIZE_FILE
     with open(SIZE_FILE) as f:
@@ -109,6 +112,21 @@ def workspace_states():
         return [True, True]
 
 
+def get_active_workspace():
+    """Mendapatkan workspace yang sedang aktif/tampil di VNC"""
+    try:
+        with open(ACTIVE_WORKSPACE_FILE) as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return 1
+
+
+def set_active_workspace(workspace_id):
+    """Mengatur workspace yang aktif/tampil di VNC"""
+    with open(ACTIVE_WORKSPACE_FILE, 'w') as f:
+        f.write('%d\n' % workspace_id)
+
+
 def start_emulator():
     global process, workspace_processes
     if emulator_running():
@@ -143,8 +161,8 @@ def start_emulator():
     
     process = workspace_processes[0] if workspace_processes and workspace_processes[0] else None
     
-    # Auto-resize untuk setiap window workspace
-    def resize_windows():
+    # Auto-resize dan atur posisi window
+    def setup_windows():
         time.sleep(3)
         try:
             # Cari semua window MicroEmulator
@@ -152,72 +170,89 @@ def start_emulator():
                                   capture_output=True, text=True, env={**os.environ, 'DISPLAY': DISPLAY})
             if result.returncode == 0:
                 windows = result.stdout.strip().split('\n')
-                for window in windows:
+                for i, window in enumerate(windows):
                     if window.strip():
+                        # Resize semua window
                         subprocess.run(['xdotool', 'windowsize', window.strip(), str(width), str(height)], 
                                      env={**os.environ, 'DISPLAY': DISPLAY})
+                        # Atur posisi: workspace 1 di kiri, workspace 2 di kanan
+                        x_pos = 0 if i == 0 else width + 10
+                        subprocess.run(['xdotool', 'windowmove', window.strip(), str(x_pos), '0'], 
+                                     env={**os.environ, 'DISPLAY': DISPLAY})
+                
+                # Tampilkan workspace yang aktif
+                show_active_workspace()
         except Exception as e:
-            print(f"Error resizing windows: {e}", flush=True)
+            print(f"Error setting up windows: {e}", flush=True)
     
-    # Jalankan resize dalam thread terpisah
+    # Jalankan setup dalam thread terpisah
     import threading
-    resize_thread = threading.Thread(target=resize_windows)
-    resize_thread.daemon = True
-    resize_thread.start()
+    setup_thread = threading.Thread(target=setup_windows)
+    setup_thread.daemon = True
+    setup_thread.start()
     
     return 'Dua workspace berhasil dimulai'
 
 
-def move_workspace(from_slot, to_slot):
-    """Memindahkan data dari satu workspace ke workspace lain"""
-    from_dir = get_workspace_dir(from_slot)
-    to_dir = get_workspace_dir(to_slot)
-    
-    if not os.path.exists(from_dir):
-        return 'Workspace sumber tidak memiliki data'
-    
-    # Hentikan emulator jika berjalan
-    if emulator_running():
-        for p in workspace_processes:
-            if p is not None and p.poll() is None:
-                p.terminate()
-        time.sleep(1)
+def show_active_workspace():
+    """Menampilkan workspace yang aktif di VNC dan menyembunyikan yang lain"""
+    active = get_active_workspace()
     
     try:
-        # Backup workspace tujuan jika ada
-        if os.path.exists(to_dir):
-            backup_dir = to_dir + '.backup'
-            if os.path.exists(backup_dir):
-                shutil.rmtree(backup_dir)
-            shutil.copytree(to_dir, backup_dir)
-        
-        # Hapus workspace tujuan
-        if os.path.exists(to_dir):
-            shutil.rmtree(to_dir)
-        
-        # Pindahkan data
-        shutil.copytree(from_dir, to_dir)
-        shutil.rmtree(from_dir)
-        
-        # Mulai ulang emulator
-        start_emulator()
-        
-        return 'Data berhasil dipindahkan dari workspace %d ke workspace %d' % (from_slot, to_slot)
+        # Cari semua window MicroEmulator
+        result = subprocess.run(['xdotool', 'search', '--name', 'MicroEmulator'], 
+                              capture_output=True, text=True, env={**os.environ, 'DISPLAY': DISPLAY})
+        if result.returncode == 0:
+            windows = result.stdout.strip().split('\n')
+            
+            for i, window in enumerate(windows):
+                if window.strip():
+                    workspace_id = i + 1
+                    if workspace_id == active:
+                        # Tampilkan window aktif di posisi 0,0
+                        subprocess.run(['xdotool', 'windowmove', window.strip(), '0', '0'], 
+                                     env={**os.environ, 'DISPLAY': DISPLAY})
+                        subprocess.run(['xdotool', 'windowactivate', window.strip()], 
+                                     env={**os.environ, 'DISPLAY': DISPLAY})
+                    else:
+                        # Sembunyikan window non-aktif
+                        subprocess.run(['xdotool', 'windowmove', window.strip(), '2000', '0'], 
+                                     env={**os.environ, 'DISPLAY': DISPLAY})
     except Exception as e:
-        # Restore backup jika ada
-        if os.path.exists(to_dir + '.backup'):
-            if os.path.exists(to_dir):
-                shutil.rmtree(to_dir)
-            shutil.move(to_dir + '.backup', to_dir)
-        return 'Gagal memindahkan: %s' % str(e)
+        print(f"Error showing active workspace: {e}", flush=True)
+
+
+def switch_workspace(workspace_id):
+    """Pindah fokus ke workspace tertentu"""
+    if not emulator_running():
+        return 'Emulator tidak berjalan'
+    
+    states = workspace_states()
+    if not states[workspace_id - 1]:
+        return 'Workspace %d tidak aktif' % workspace_id
+    
+    set_active_workspace(workspace_id)
+    show_active_workspace()
+    return 'Berpindah ke Workspace %d' % workspace_id
 
 
 def make_screenshot():
     ensure_files()
     raw = SCREENSHOT + '.raw.png'
     try:
-        window = subprocess.check_output(['xdotool', 'search', '--name', 'MicroEmulator'], env={**os.environ, 'DISPLAY': DISPLAY}, text=True).splitlines()[0]
-        command = ['import', '-display', DISPLAY, '-window', window, '-crop', '393x326+0+50', '-type', 'TrueColor', '-depth', '8', 'PNG24:' + raw]
+        # Ambil screenshot dari window yang aktif
+        active = get_active_workspace()
+        result = subprocess.run(['xdotool', 'search', '--name', 'MicroEmulator'], 
+                              capture_output=True, text=True, env={**os.environ, 'DISPLAY': DISPLAY})
+        if result.returncode == 0:
+            windows = result.stdout.strip().split('\n')
+            if len(windows) >= active:
+                window = windows[active - 1]
+                command = ['import', '-display', DISPLAY, '-window', window, '-crop', '393x326+0+50', '-type', 'TrueColor', '-depth', '8', 'PNG24:' + raw]
+            else:
+                raise IndexError("Window tidak ditemukan")
+        else:
+            raise subprocess.CalledProcessError(result.returncode, 'xdotool')
     except (subprocess.CalledProcessError, IndexError):
         command = ['import', '-display', DISPLAY, '-window', 'root', '-crop', '393x326+0+0', '-type', 'TrueColor', '-depth', '8', 'PNG24:' + raw]
     result = subprocess.run(command, capture_output=True)
@@ -272,6 +307,7 @@ def resize_emulator(width, height):
 def page(message=''):
     running = emulator_running()
     states = workspace_states()
+    active_workspace = get_active_workspace()
     notice = '<div class="notice">%s</div>' % message if message else ''
     state_class = '' if running else ' stopped'
     state_text = 'running' if running else 'stopped'
@@ -279,7 +315,7 @@ def page(message=''):
 <html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Avatar FreeJ2ME</title>
 <style>
-:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#0b1020;color:#eef2ff;font:15px system-ui,-apple-system,Segoe UI,sans-serif}main{max-width:980px;margin:auto;padding:32px 20px}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}.brand{font-size:25px;font-weight:800}.muted,.small{color:#97a3bf}.small{font-size:13px}.grid{display:grid;grid-template-columns:1.1fr .9fr;gap:18px}.card{background:#121a2e;border:1px solid #263453;border-radius:18px;padding:22px;box-shadow:0 14px 40px #0003}h2{margin:0 0 8px}.status{padding:6px 11px;border-radius:99px;background:#163d32;color:#70e1b4}.status.stopped{background:#442333;color:#ff9db2}button{border:0;border-radius:10px;padding:11px 15px;background:#6d5dfc;color:white;font-weight:700;cursor:pointer;margin:5px 5px 5px 0}button.alt{background:#263453}button.move{background:#f59e0b}button.move:hover{background:#d97706}input{width:100%%;padding:12px;border:1px solid #334367;border-radius:10px;background:#0c1426;color:white;margin:7px 0 12px}.notice{background:#1d2b4a;padding:12px;border-radius:10px;margin-bottom:18px}.shot{width:100%%;min-height:260px;object-fit:contain;background:#080b13;border-radius:12px;margin-top:14px;border:1px solid #263453}.workspace-info{background:#1a2338;padding:12px;border-radius:8px;margin:10px 0}.move-buttons{display:flex;gap:10px;margin-top:10px}@media(max-width:720px){.grid{grid-template-columns:1fr}.move-buttons{flex-direction:column}}
+:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#0b1020;color:#eef2ff;font:15px system-ui,-apple-system,Segoe UI,sans-serif}main{max-width:980px;margin:auto;padding:32px 20px}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}.brand{font-size:25px;font-weight:800}.muted,.small{color:#97a3bf}.small{font-size:13px}.grid{display:grid;grid-template-columns:1.1fr .9fr;gap:18px}.card{background:#121a2e;border:1px solid #263453;border-radius:18px;padding:22px;box-shadow:0 14px 40px #0003}h2{margin:0 0 8px}.status{padding:6px 11px;border-radius:99px;background:#163d32;color:#70e1b4}.status.stopped{background:#442333;color:#ff9db2}button{border:0;border-radius:10px;padding:11px 15px;background:#6d5dfc;color:white;font-weight:700;cursor:pointer;margin:5px 5px 5px 0}button.alt{background:#263453}button.switch{background:#10b981}button.switch:hover{background:#059669}button.switch.active{background:#6d5dfc;cursor:default}input{width:100%%;padding:12px;border:1px solid #334367;border-radius:10px;background:#0c1426;color:white;margin:7px 0 12px}.notice{background:#1d2b4a;padding:12px;border-radius:10px;margin-bottom:18px}.shot{width:100%%;min-height:260px;object-fit:contain;background:#080b13;border-radius:12px;margin-top:14px;border:1px solid #263453}.workspace-switch{display:flex;gap:10px;margin:10px 0}.workspace-info{background:#1a2338;padding:12px;border-radius:8px;margin:10px 0}@media(max-width:720px){.grid{grid-template-columns:1fr}.workspace-switch{flex-direction:column}}
 </style></head><body><main>
 <div class="top"><div><div class="brand">Avatar FreeJ2ME</div><div class="muted">J2ME game control panel</div></div><div class="status%s">● %s</div></div>%s
 <div class="grid"><section class="card"><h2>Emulator</h2><p class="muted">MicroEmulator · avatar.jar · Display virtual: %s</p>
@@ -287,19 +323,20 @@ def page(message=''):
 <form method="post" action="/start"><button>Start emulator</button></form>
 <form method="post" action="/screenshot"><button class="alt">Ambil screenshot</button><a href="/screenshot.png" target="_blank"><button type="button" class="alt">Buka gambar</button></a></form>
 <p class="small">Screenshot diambil dari framebuffer Xvfb MicroEmulator.</p><img class="shot" src="/screenshot.png?%s" alt="Screenshot emulator" onerror="this.style.display='none'"></section>
-<section class="card"><h2>Pindahkan Data</h2><p class="muted">Pindahkan data (save game, cache) antar workspace</p>
+<section class="card"><h2>Pindah Workspace</h2><p class="muted">Pindahkan tampilan VNC antar workspace</p>
 <div class="workspace-info">
+<strong>Workspace aktif:</strong> Workspace %d<br>
 <strong>Workspace 1:</strong> %s<br>
 <strong>Workspace 2:</strong> %s
 </div>
-<div class="move-buttons">
-<form method="post" action="/move-workspace"><input type="hidden" name="from" value="1"><input type="hidden" name="to" value="2"><button type="submit" class="move">Pindah dari Workspace 1 ke 2</button></form>
-<form method="post" action="/move-workspace"><input type="hidden" name="from" value="2"><input type="hidden" name="to" value="1"><button type="submit" class="move">Pindah dari Workspace 2 ke 1</button></form>
+<div class="workspace-switch">
+<form method="post" action="/switch-workspace"><input type="hidden" name="workspace" value="1"><button type="submit" class="switch %s">Workspace 1</button></form>
+<form method="post" action="/switch-workspace"><input type="hidden" name="workspace" value="2"><button type="submit" class="switch %s">Workspace 2</button></form>
 </div>
-<p class="small">Data akan dipindahkan dan emulator akan restart otomatis.</p></section>
+<p class="small">Klik tombol untuk memindahkan fokus VNC ke workspace yang dipilih.</p></section>
 <section class="card"><h2>Change password</h2><p class="muted">Hanya password login panel yang berubah. Emulator tetap berjalan.</p>
 <form method="post" action="/change-password"><label>Password saat ini</label><input type="password" name="current" required><label>Password baru</label><input type="password" name="new" minlength="6" required><label>Ulangi password baru</label><input type="password" name="confirm" minlength="6" required><button>Simpan password</button></form>
-<p class="small">Password default awal: <b>123456</b>. Data login disimpan di volume /data.</p></section></div></main></body></html>''' % (state_class, state_text, notice, DISPLAY, 'aktif' if states[0] else 'nonaktif', 'aktif' if states[1] else 'nonaktif', int(time.time()), 'aktif' if states[0] else 'nonaktif', 'aktif' if states[1] else 'nonaktif')
+<p class="small">Password default awal: <b>123456</b>. Data login disimpan di volume /data.</p></section></div></main></body></html>''' % (state_class, state_text, notice, DISPLAY, 'aktif' if states[0] else 'nonaktif', 'aktif' if states[1] else 'nonaktif', int(time.time()), active_workspace, 'aktif' if states[0] else 'nonaktif', 'aktif' if states[1] else 'nonaktif', 'active' if active_workspace == 1 else '', 'active' if active_workspace == 2 else '')
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -378,10 +415,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 time.sleep(1)
                 start_emulator()
                 message = 'Workspace %s %s' % (slot, 'diaktifkan' if states[index] else 'dinonaktifkan')
-            elif path == '/move-workspace':
-                from_slot = int(fields.get('from', ['1'])[0])
-                to_slot = int(fields.get('to', ['2'])[0])
-                message = move_workspace(from_slot, to_slot)
+            elif path == '/switch-workspace':
+                workspace_id = int(fields.get('workspace', ['1'])[0])
+                message = switch_workspace(workspace_id)
             elif path == '/screenshot':
                 make_screenshot()
                 message = 'Screenshot berhasil diperbarui'
@@ -435,4 +471,4 @@ SH
 WORKDIR /opt/avatar
 EXPOSE 5901 8080
 
-CMD ["sh", "-c", "mkdir -p /data; if [ ! -s /data/vnc.pass ]; then x11vnc -storepasswd \"${VNC_PASSWORD:-123456}\" /data/vnc.pass >/dev/null 2>&1 || true; fi; Xvfb :99 -screen 0 393x450x24 -ac +extension GLX >/data/xvfb.log 2>&1 & sleep 2; if xdpyinfo -display :99 >/dev/null 2>&1; then (while true; do x11vnc -display :99 -rfbport 5901 -rfbauth /data/vnc.pass -forever -shared -xkb -noxrecord -noxfixes -noxdamage >>/data/x11vnc.log 2>&1 || true; sleep 2; done) & else echo 'Xvfb failed; HTTP panel will still start' >>/data/xvfb.log; fi; exec python3 /opt/avatar/app.py"]
+CMD ["sh", "-c", "mkdir -p /data; if [ ! -s /data/vnc.pass ]; then x11vnc -storepasswd \"${VNC_PASSWORD:-123456}\" /data/vnc.pass >/dev/null 2>&1 || true; fi; Xvfb :99 -screen 0 800x600x24 -ac +extension GLX >/data/xvfb.log 2>&1 & sleep 2; if xdpyinfo -display :99 >/dev/null 2>&1; then (while true; do x11vnc -display :99 -rfbport 5901 -rfbauth /data/vnc.pass -forever -shared -xkb -noxrecord -noxfixes -noxdamage >>/data/x11vnc.log 2>&1 || true; sleep 2; done) & else echo 'Xvfb failed; HTTP panel will still start' >>/data/xvfb.log; fi; exec python3 /opt/avatar/app.py"]
